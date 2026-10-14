@@ -41,6 +41,67 @@ TOPICS = [
     "Community spotlight", "Case study", "Feature highlight", "Announcement",
 ]
 
+UNICODE_ESCAPE_STYLES = [
+    "JS \\uXXXX (surrogate pairs for >U+FFFF)",
+    "ES6 \\u{XXXXX}",
+    "HTML hex entity &#xXXXX;",
+    "HTML decimal entity &#DDDD;",
+    "U+XXXX notation",
+    "Python \\xXX / \\uXXXX / \\UXXXXXXXX",
+    "JSON \\uXXXX (lowercase)",
+]
+
+MOJIBAKE_PRESETS = {
+    "Western — UTF-8 read as Latin-1":       ("utf-8", "latin-1"),
+    "Western — UTF-8 read as cp1252":        ("utf-8", "cp1252"),
+    "Arabic — UTF-8 read as Latin-1":        ("utf-8", "latin-1"),
+    "Arabic — UTF-8 read as cp1252":         ("utf-8", "cp1252"),
+    "Arabic — UTF-8 read as cp1256":         ("utf-8", "cp1256"),
+    "Chinese — UTF-8 read as Latin-1":       ("utf-8", "latin-1"),
+    "Chinese — GBK read as Latin-1":         ("gbk", "latin-1"),
+    "Chinese — Big5 read as Latin-1":        ("big5", "latin-1"),
+    "Japanese — UTF-8 read as Latin-1":      ("utf-8", "latin-1"),
+    "Japanese — Shift-JIS read as Latin-1":  ("shift_jis", "latin-1"),
+    "Korean — UTF-8 read as Latin-1":        ("utf-8", "latin-1"),
+    "Korean — EUC-KR read as Latin-1":       ("euc-kr", "latin-1"),
+    "Russian — UTF-8 read as Latin-1":       ("utf-8", "latin-1"),
+    "Russian — UTF-8 read as cp1251":        ("utf-8", "cp1251"),
+    "Hebrew — UTF-8 read as Latin-1":        ("utf-8", "latin-1"),
+    "Hebrew — UTF-8 read as cp1255":         ("utf-8", "cp1255"),
+    "Greek — UTF-8 read as Latin-1":         ("utf-8", "latin-1"),
+    "Greek — UTF-8 read as cp1253":          ("utf-8", "cp1253"),
+    "Thai — UTF-8 read as Latin-1":          ("utf-8", "latin-1"),
+    "Hindi — UTF-8 read as Latin-1":         ("utf-8", "latin-1"),
+    "Turkish — UTF-8 read as Latin-1":       ("utf-8", "latin-1"),
+    "Persian — UTF-8 read as Latin-1":       ("utf-8", "latin-1"),
+    "Double mojibake (UTF-8→L1→UTF-8→L1)":   ("__double__", "latin-1"),
+    "Triple mojibake":                       ("__triple__", "latin-1"),
+}
+
+SCRIPT_SAMPLES = {
+    "Arabic":               "العربية نص تجريبي للاختبار مرحبا بالعالم أهلا وسهلا",
+    "Persian (Farsi)":      "سلام دنیا این یک متن آزمایشی است خوش آمدید",
+    "Urdu":                 "ہیلو دنیا یہ ایک ٹیسٹ متن ہے خوش آمدید",
+    "Hebrew":               "שלום עולם זהו טקסט בדיקה למילוי תוכן ברוכים הבאים",
+    "Chinese (Simplified)": "你好世界这是一个测试文本用于填充内容欢迎光临",
+    "Chinese (Traditional)":"你好世界這是一個測試文本用於填充內容歡迎光臨",
+    "Japanese":             "こんにちは世界これはテストテキストですようこそ",
+    "Korean":               "안녕하세요 세계 이것은 테스트 텍스트입니다 환영합니다",
+    "Russian":              "Привет мир это тестовый текст для заполнения добро пожаловать",
+    "Ukrainian":            "Привіт світе це тестовий текст для заповнення ласкаво просимо",
+    "Greek":                "Γεια σου κόσμε αυτό είναι ένα δοκιμαστικό κείμενο καλώς ήρθες",
+    "Turkish":              "Merhaba dünya bu bir test metnidir hoş geldiniz",
+    "Thai":                 "สวัสดีชาวโลกนี่คือข้อความทดสอบยินดีต้อนรับ",
+    "Hindi (Devanagari)":   "नमस्ते दुनिया यह एक परीक्षण पाठ है स्वागत है",
+    "Tamil":                "வணக்கம் உலகம் இது ஒரு சோதனை உரை வரவேற்கிறோம்",
+    "Bengali":              "হ্যালো বিশ্ব এটি একটি পরীক্ষা পাঠ্য স্বাগতম",
+    "Armenian":             "Բարև աշխարհ սա փորձնական տեքստ է բարի գալուստ",
+    "Georgian":             "გამარჯობა მსოფლიო ეს არის ტესტის ტექსტი მოგესალმებით",
+    "Amharic":              "ሰላም ዓለም ይህ የሙከራ ጽሑፍ ነው እንኳን ደህና መጡ",
+    "Vietnamese":           "Xin chào thế giới đây là văn bản thử nghiệm chào mừng",
+    "Kurdish":              "سڵاو جیهان ئەمە دەقێکی تاقیکارییە بەخێربێن",
+}
+
 # ----------------------------------------------------------------------------
 # Text transforms
 # ----------------------------------------------------------------------------
@@ -92,10 +153,110 @@ def inject_random_strings(doc, count, min_len, max_len, prefix="rnd"):
     lines = body.split("\n")
     strings = [rand_alpha(random.randint(min_len, max_len)) for _ in range(count)]
 
-    # Pick random insertion slots (skip the very first line so we don't break <body ...>)
     slots = list(range(1, max(2, len(lines))))
     random.shuffle(slots)
-    picks = sorted(slots[:count], reverse=True)  # insert bottom-up so indices stay valid
+    picks = sorted(slots[:count], reverse=True)
+    for i, idx in enumerate(picks):
+        lines.insert(idx, f"<!-- {prefix}:{strings[i]} -->")
+
+    return head + "\n".join(lines) + tail
+
+# ---------------------------------------------------------------------------
+# Unicode escape sequences
+# ---------------------------------------------------------------------------
+def to_unicode_escape(text, style, rate=1.0, skip_ascii=True):
+    """Convert chars to unicode escape sequences.
+       HTML entity styles actually render as the original chars.
+       Backslash/U+/Python styles are source-level noise only."""
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if skip_ascii and ch.isascii() and (ch.isalnum() or ch in " .,!?-:;()[]{}'\"/\\\n"):
+            out.append(ch)
+            continue
+        if rate < 1.0 and random.random() > rate:
+            out.append(ch)
+            continue
+
+        if style.startswith("JS"):
+            if cp > 0xFFFF:
+                cp2 = cp - 0x10000
+                hi, lo = 0xD800 + (cp2 >> 10), 0xDC00 + (cp2 & 0x3FF)
+                out.append(f"\\u{hi:04X}\\u{lo:04X}")
+            else:
+                out.append(f"\\u{cp:04X}")
+        elif style.startswith("JSON"):
+            if cp > 0xFFFF:
+                cp2 = cp - 0x10000
+                hi, lo = 0xD800 + (cp2 >> 10), 0xDC00 + (cp2 & 0x3FF)
+                out.append(f"\\u{hi:04x}\\u{lo:04x}")
+            else:
+                out.append(f"\\u{cp:04x}")
+        elif style.startswith("ES6"):
+            out.append(f"\\u{{{cp:X}}}")
+        elif style.startswith("HTML hex"):
+            out.append(f"&#x{cp:X};")
+        elif style.startswith("HTML decimal"):
+            out.append(f"&#{cp};")
+        elif style.startswith("U+"):
+            out.append(f"U+{cp:04X}")
+        elif style.startswith("Python"):
+            if cp < 0x100:
+                out.append(f"\\x{cp:02x}")
+            elif cp < 0x10000:
+                out.append(f"\\u{cp:04x}")
+            else:
+                out.append(f"\\U{cp:08x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+# ---------------------------------------------------------------------------
+# Script mojibake (charset round-trip corruption)
+# ---------------------------------------------------------------------------
+def to_script_mojibake(text, preset):
+    """Corrupt text by encoding in one charset and decoding as another."""
+    if preset not in MOJIBAKE_PRESETS:
+        return text
+    src, dst = MOJIBAKE_PRESETS[preset]
+    try:
+        if src == "__double__":
+            x = text.encode("utf-8").decode(dst, errors="replace")
+            return x.encode("utf-8").decode(dst, errors="replace")
+        if src == "__triple__":
+            x = text
+            for _ in range(3):
+                x = x.encode("utf-8").decode(dst, errors="replace")
+            return x
+        return text.encode(src, errors="replace").decode(dst, errors="replace")
+    except (LookupError, UnicodeError):
+        return text
+
+def rand_script_string(script, min_len=8, max_len=24):
+    """Return a random slice of real text in the given script."""
+    sample = SCRIPT_SAMPLES.get(script)
+    if not sample:
+        return rand_alpha(random.randint(min_len, max_len))
+    n = random.randint(min(6, len(sample)), min(len(sample), max_len))
+    start = random.randint(0, max(0, len(sample) - n))
+    return sample[start:start + n].replace("--", "\u2010\u2010")
+
+def inject_script_content(doc, count, script, prefix="txt"):
+    """Sprinkle real Arabic/Chinese/etc. text as HTML comments through the body."""
+    if count <= 0:
+        return doc
+    body_start = doc.find("<body")
+    body_end = doc.rfind("</body>")
+    if body_start < 0 or body_end < 0:
+        return doc
+
+    head, body, tail = doc[:body_start], doc[body_start:body_end], doc[body_end:]
+    lines = body.split("\n")
+    strings = [rand_script_string(script) for _ in range(count)]
+
+    slots = list(range(1, max(2, len(lines))))
+    random.shuffle(slots)
+    picks = sorted(slots[:count], reverse=True)
     for i, idx in enumerate(picks):
         lines.insert(idx, f"<!-- {prefix}:{strings[i]} -->")
 
@@ -401,7 +562,7 @@ def build_html(C):
 
     doc = "\n".join(L)
 
-    # Inject random alphanumeric strings through the body (before padding)
+    # --- injections into the body (order matters) ---
     if C.get("rand_on"):
         doc = inject_random_strings(
             doc,
@@ -409,6 +570,14 @@ def build_html(C):
             C["rand_min"],
             C["rand_max"],
             C["rand_prefix"],
+        )
+
+    if C.get("ss_on"):
+        doc = inject_script_content(
+            doc,
+            C["ss_count"],
+            C["ss_script"],
+            C["ss_prefix"],
         )
 
     if C["pad_to"] and doc.count("\n") + 1 < C["pad_to"]:
@@ -561,6 +730,27 @@ with st.sidebar:
         height=80,
     )
 
+    st.subheader("Unicode escape sequences")
+    ue_on = st.checkbox("Escape headlines & bodies to Unicode sequences", False)
+    ue_style = st.selectbox(
+        "Escape style", UNICODE_ESCAPE_STYLES, index=0, disabled=not ue_on,
+        help="HTML hex/decimal styles render as the original characters. "
+             "Backslash / U+ / Python / JSON styles are source-level noise only.",
+    )
+    ue_rate = st.slider("Escape rate", 0.1, 1.0, 1.0, step=0.1, disabled=not ue_on)
+    ue_skip_ascii = st.checkbox(
+        "Leave plain ASCII words untouched", True, disabled=not ue_on,
+        help="Only escape non-ASCII / punctuation characters. Turn off to escape everything.",
+    )
+
+    st.subheader("Script mojibake")
+    sm_on = st.checkbox("Apply script mojibake to headlines & bodies", False)
+    sm_preset = st.selectbox(
+        "Mojibake preset", list(MOJIBAKE_PRESETS.keys()), index=0, disabled=not sm_on,
+        help="Round-trips text through a source charset and decodes as another "
+             "(e.g. Arabic UTF-8 bytes read as Latin-1).",
+    )
+
     st.subheader("Random alphanumeric strings")
     rand_on = st.checkbox("Inject random strings into HTML body", True)
     rand_count = st.slider("How many", 1, 300, 40, step=1, disabled=not rand_on)
@@ -571,6 +761,14 @@ with st.sidebar:
         "Comment prefix", "rnd", disabled=not rand_on,
         help="Rendered as <!-- prefix:XXXX --> in the source."
     )
+
+    st.subheader("Hidden script content")
+    ss_on = st.checkbox("Inject real script text as HTML comments", False)
+    ss_script = st.selectbox(
+        "Script", list(SCRIPT_SAMPLES.keys()), index=0, disabled=not ss_on,
+    )
+    ss_count = st.slider("How many strings", 1, 200, 30, step=1, disabled=not ss_on)
+    ss_prefix = st.text_input("Script comment prefix", "txt", disabled=not ss_on)
 
     st.subheader("Length & display")
     pad_to = st.number_input("Pad output to at least N lines (0 = off)", 0, 20000, 1000, step=100)
@@ -583,16 +781,35 @@ with st.sidebar:
 with st.spinner("Parsing blocks…"):
     blocks = parse_blocks(bulk_text)
 
-# Apply encoding transforms (only on the first run / when inputs change)
+# Original mojibake (cp1252 approximation)
 if moji_on:
     blocks = [{**b, "body": to_mojibake(b["body"]), "headline": to_mojibake(b["headline"])}
               for b in blocks]
     intro = to_mojibake(intro)
     hero_headline = to_mojibake(hero_headline)
 
+# Numeric entity encoding
 if ent_on:
     blocks = [{**b, "body": to_numeric_entities(b["body"], ent_rate)} for b in blocks]
     intro = to_numeric_entities(intro, ent_rate)
+
+# Script mojibake (charset round-trip)
+if sm_on:
+    blocks = [{**b,
+               "headline": to_script_mojibake(b["headline"], sm_preset),
+               "body": to_script_mojibake(b["body"], sm_preset)}
+              for b in blocks]
+    intro = to_script_mojibake(intro, sm_preset)
+    hero_headline = to_script_mojibake(hero_headline, sm_preset)
+
+# Unicode escape sequences
+if ue_on:
+    blocks = [{**b,
+               "headline": to_unicode_escape(b["headline"], ue_style, ue_rate, ue_skip_ascii),
+               "body": to_unicode_escape(b["body"], ue_style, ue_rate, ue_skip_ascii)}
+              for b in blocks]
+    intro = to_unicode_escape(intro, ue_style, ue_rate, ue_skip_ascii)
+    hero_headline = to_unicode_escape(hero_headline, ue_style, ue_rate, ue_skip_ascii)
 
 def parse_pairs(raw, default=None):
     out = []
@@ -637,6 +854,7 @@ C = dict(
     rand_on=rand_on, rand_count=int(rand_count),
     rand_min=int(rand_min), rand_max=int(rand_max),
     rand_prefix=rand_prefix,
+    ss_on=ss_on, ss_script=ss_script, ss_count=int(ss_count), ss_prefix=ss_prefix,
 )
 
 with st.spinner("Building HTML & EML…"):
