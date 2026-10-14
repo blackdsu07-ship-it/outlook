@@ -128,10 +128,38 @@ MACRO_PLACEMENTS = [
     "Every N lines",
 ]
 
+# --- spacer / content-push ---------------------------------------------------
+SPACER_CHARS = {
+    "&nbsp; (non-breaking space)":     "&nbsp;",
+    "&zwnj;&nbsp; (preheader classic)": "&zwnj;&nbsp;",
+    "&#8203; (zero-width space)":      "&#8203;",
+    "&zwj; (zero-width joiner)":       "&zwj;",
+    "&emsp; (em space)":               "&emsp;",
+    "&ensp; (en space)":               "&ensp;",
+    "· (middle dot)":                   "·",
+    ". (period)":                       ".",
+    "• (bullet)":                       "•",
+    "– (en dash)":                      "–",
+    "— (em dash)":                      "—",
+    "_ (underscore)":                   "_",
+}
+
+SPACER_POSITIONS = [
+    "Preheader tail",
+    "Start of body",
+    "End of body",
+    "Between each article block",
+]
+
+SPACER_WRAPPERS = [
+    "Hidden span",
+    "CSS class (display:none; opacity:0)",
+    "Plain (no wrap)",
+]
+
 # CSS class name used by the "CSS class" wrapper. Rule is emitted in <head>.
 HIDDEN_CLASS = "mc-hidden"
 
-# The reusable hidden-content CSS rule (goes inside the <style> block in <head>).
 HIDDEN_CSS_RULE = (
     f"  .{HIDDEN_CLASS}{{"
     "opacity:0!important;"
@@ -187,8 +215,6 @@ def rand_alpha(n, pool=string.ascii_letters + string.digits):
     return "".join(random.choice(pool) for _ in range(n))
 
 def inject_random_strings(doc, count, min_len, max_len, prefix="rnd"):
-    """Sprinkle `count` random alphanumeric HTML comments through the <body>.
-    Invisible in email clients; visible in 'View source'."""
     if count <= 0:
         return doc
     body_start = doc.find("<body")
@@ -212,9 +238,6 @@ def inject_random_strings(doc, count, min_len, max_len, prefix="rnd"):
 # Unicode escape sequences
 # ---------------------------------------------------------------------------
 def to_unicode_escape(text, style, rate=1.0, skip_ascii=True):
-    """Convert chars to unicode escape sequences.
-       HTML entity styles actually render as the original chars.
-       Backslash/U+/Python styles are source-level noise only."""
     out = []
     for ch in text:
         cp = ord(ch)
@@ -259,10 +282,9 @@ def to_unicode_escape(text, style, rate=1.0, skip_ascii=True):
     return "".join(out)
 
 # ---------------------------------------------------------------------------
-# Script mojibake (charset round-trip corruption)
+# Script mojibake
 # ---------------------------------------------------------------------------
 def to_script_mojibake(text, preset):
-    """Corrupt text by encoding in one charset and decoding as another."""
     if preset not in MOJIBAKE_PRESETS:
         return text
     src, dst = MOJIBAKE_PRESETS[preset]
@@ -280,7 +302,6 @@ def to_script_mojibake(text, preset):
         return text
 
 def rand_script_string(script, min_len=8, max_len=24):
-    """Return a random slice of real text in the given script."""
     sample = SCRIPT_SAMPLES.get(script)
     if not sample:
         return rand_alpha(random.randint(min_len, max_len))
@@ -289,7 +310,6 @@ def rand_script_string(script, min_len=8, max_len=24):
     return sample[start:start + n].replace("--", "\u2010\u2010")
 
 def inject_script_content(doc, count, script, prefix="txt"):
-    """Sprinkle real Arabic/Chinese/etc. text as HTML comments through the body."""
     if count <= 0:
         return doc
     body_start = doc.find("<body")
@@ -310,16 +330,44 @@ def inject_script_content(doc, count, script, prefix="txt"):
     return head + "\n".join(lines) + tail
 
 # ---------------------------------------------------------------------------
+# Content push / spacer
+# ---------------------------------------------------------------------------
+def build_spacer_run(unit, count, wrapper):
+    """Build a spacer run: `count` copies of `unit`, wrapped as requested."""
+    if not unit or count <= 0:
+        return ""
+    body = unit * int(count)
+    if wrapper == "Hidden span":
+        return (
+            '<span style="display:none;font-size:0;line-height:0;'
+            'max-height:0;max-width:0;opacity:0;overflow:hidden;'
+            'mso-hide:all;">' + body + '</span>'
+        )
+    if wrapper == "CSS class (display:none; opacity:0)":
+        return f'<span class="{HIDDEN_CLASS}">{body}</span>'
+    return body  # Plain
+
+def inject_at_position(doc, snippet, position):
+    """Insert `snippet` at Start/End of body. Returns doc unchanged otherwise."""
+    if not snippet:
+        return doc
+    if position == "Start of body":
+        i = doc.find("<body")
+        if i < 0:
+            return doc
+        i = doc.find(">", i) + 1
+        return doc[:i] + "\n" + snippet + "\n" + doc[i:]
+    if position == "End of body":
+        i = doc.rfind("</body>")
+        if i < 0:
+            return doc
+        return doc[:i] + snippet + "\n" + doc[i:]
+    return doc
+
+# ---------------------------------------------------------------------------
 # Repeated macros
 # ---------------------------------------------------------------------------
 def build_macro_run(macros, reps_per, separator, wrapper, interleave=False):
-    """Build a run of repeated macros.
-       - macros: list of macro strings
-       - reps_per: how many times each macro appears
-       - separator: string inserted between every macro occurrence
-       - wrapper: Hidden span / CSS class / Visible inline / HTML comment / Plain
-       - interleave: shuffle macros instead of grouping by type
-    """
     if not macros or reps_per <= 0:
         return ""
 
@@ -346,10 +394,9 @@ def build_macro_run(macros, reps_per, separator, wrapper, interleave=False):
         return f'<!-- {body} -->'
     if wrapper == "Plain (no wrap)":
         return body
-    return body  # Visible inline
+    return body
 
 def inject_macro_run(doc, run, placement, every_n=20):
-    """Insert a macro run into the document at the chosen placement."""
     if not run:
         return doc
 
@@ -401,13 +448,13 @@ def html_to_text(h):
 # ----------------------------------------------------------------------------
 # HTML block builders
 # ----------------------------------------------------------------------------
-def preheader_block(text):
+def preheader_block(text, extra_pad=""):
     pad = ("&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;"
            "&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;"
            "&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;")
     return (f'<div class="{HIDDEN_CLASS}" style="display:none;font-size:1px;color:#ffffff;line-height:1px;'
             f'max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">'
-            f'{esc(text)}{pad}</div>')
+            f'{esc(text)}{pad}{extra_pad}</div>')
 
 def header_block(brand, tagline, nav, bg, fg):
     L = []
@@ -620,7 +667,6 @@ def build_html(C):
     L.append('  a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font-size:inherit!important;font-family:inherit!important;font-weight:inherit!important;line-height:inherit!important;}')
     L.append('  .ExternalClass{width:100%;}')
     L.append('  .ExternalClass,.ExternalClass p,.ExternalClass span,.ExternalClass font,.ExternalClass td,.ExternalClass div{line-height:100%;}')
-    # --- hidden-content rule (opacity:0 + display:none) ---
     L.append(HIDDEN_CSS_RULE)
     L.append('  @media only screen and (max-width:620px){')
     L.append('    .wrap{width:100%!important;max-width:100%!important;}')
@@ -638,7 +684,7 @@ def build_html(C):
              f'font-family:Arial,Helvetica,sans-serif;">')
 
     if C["preheader"]:
-        L.append(preheader_block(C["preheader"]))
+        L.append(preheader_block(C["preheader"], C.get("preheader_spacer", "")))
 
     L.append(f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
              f'style="background:{C["page_bg"]};">')
@@ -658,6 +704,7 @@ def build_html(C):
                  f'Arial,Helvetica,sans-serif;color:#3a3a3a;">{nl2br(C["intro"])}</td></tr>')
 
     L.append(f'<!-- ===== {len(C["blocks"])} article block(s) ===== -->')
+    between_run = C.get("sp_between_run", "")
     for i, b in enumerate(C["blocks"], start=1):
         L.append(f'<!-- article {i} of {len(C["blocks"])} -->')
         headline = b["headline"] or f"Update #{i}"
@@ -665,6 +712,9 @@ def build_html(C):
             headline = zalgo(headline, C["zalgo_n"])
         L.append(article_block(i, headline, b["body"], b["cta"] or C["default_cta"],
                                b["url"] or C["default_url"], A))
+        if between_run and i < len(C["blocks"]):
+            L.append(f'<!-- content-push:between -->')
+            L.append(between_run)
 
     if C["products"]:
         L.append(grid_block(C["products"], A, cols=C["grid_cols"], title=C["grid_title"]))
@@ -717,6 +767,13 @@ def build_html(C):
             interleave=C.get("rm_interleave", False),
         )
         doc = inject_macro_run(doc, run, C["rm_placement"], C["rm_every"])
+
+    # Content-push spacers at start/end of body.
+    # (Preheader tail and between-block positions were handled above.)
+    if C.get("sp_start_run"):
+        doc = inject_at_position(doc, C["sp_start_run"], "Start of body")
+    if C.get("sp_end_run"):
+        doc = inject_at_position(doc, C["sp_end_run"], "End of body")
 
     if C["pad_to"] and doc.count("\n") + 1 < C["pad_to"]:
         need = C["pad_to"] - (doc.count("\n") + 1)
@@ -878,15 +935,12 @@ with st.sidebar:
     ue_rate = st.slider("Escape rate", 0.1, 1.0, 1.0, step=0.1, disabled=not ue_on)
     ue_skip_ascii = st.checkbox(
         "Leave plain ASCII words untouched", True, disabled=not ue_on,
-        help="Only escape non-ASCII / punctuation characters. Turn off to escape everything.",
     )
 
     st.subheader("Script mojibake")
     sm_on = st.checkbox("Apply script mojibake to headlines & bodies", False)
     sm_preset = st.selectbox(
         "Mojibake preset", list(MOJIBAKE_PRESETS.keys()), index=0, disabled=not sm_on,
-        help="Round-trips text through a source charset and decodes as another "
-             "(e.g. Arabic UTF-8 bytes read as Latin-1).",
     )
 
     st.subheader("Repeated macros")
@@ -896,16 +950,13 @@ with st.sidebar:
         options=MERGE_TAGS + ["(custom)"],
         default=["{name}"],
         disabled=not rm_on,
-        help="Pick one or more built-in tags; add '(custom)' to enter your own below.",
     )
     rm_custom = st.text_input(
         "Custom macro", "{name}",
         disabled=not rm_on or "(custom)" not in rm_sel,
-        help="Used when '(custom)' is selected above.",
     )
     rm_reps = st.slider(
         "Repetitions per macro", 1, 500, 20, step=1, disabled=not rm_on,
-        help="Total macros = number of selected macros × this value.",
     )
     rm_sep_label = st.selectbox(
         "Separator between macros", list(MACRO_SEPARATORS.keys()),
@@ -913,8 +964,6 @@ with st.sidebar:
     )
     rm_wrap = st.selectbox(
         "Wrapper", MACRO_WRAPPERS, index=1, disabled=not rm_on,
-        help="'CSS class' uses the .mc-hidden rule (display:none; opacity:0) "
-             "in the <head>. 'Hidden span' uses inline styles only.",
     )
     rm_placement = st.selectbox(
         "Placement", MACRO_PLACEMENTS, index=0, disabled=not rm_on,
@@ -927,6 +976,32 @@ with st.sidebar:
         "Interleave (shuffle macros instead of grouping)", False, disabled=not rm_on,
     )
 
+    st.subheader("Content push / spacer")
+    sp_on = st.checkbox("Inject spacer runs", True,
+                        help="Repeating spacer characters used to push content around "
+                             "(classic use: pad the preheader tail so inbox previews show "
+                             "your intended text).")
+    sp_char_label = st.selectbox(
+        "Spacer character", list(SPACER_CHARS.keys()), index=1, disabled=not sp_on,
+    )
+    sp_count = st.slider(
+        "Units per run", 1, 500, 60, step=1, disabled=not sp_on,
+        help="How many copies of the spacer character per insertion point.",
+    )
+    sp_wrap = st.selectbox(
+        "Wrapper", SPACER_WRAPPERS, index=0, disabled=not sp_on,
+        help="'Hidden span' keeps the spacer invisible but still in the DOM. "
+             "'Plain' outputs raw characters (visible if the character isn't "
+             "whitespace).",
+    )
+    sp_positions = st.multiselect(
+        "Insertion points",
+        options=SPACER_POSITIONS,
+        default=["Preheader tail"],
+        disabled=not sp_on,
+        help="Where to place the spacer runs. Multiple can be selected.",
+    )
+
     st.subheader("Random alphanumeric strings")
     rand_on = st.checkbox("Inject random strings into HTML body", True)
     rand_count = st.slider("How many", 1, 300, 40, step=1, disabled=not rand_on)
@@ -935,7 +1010,6 @@ with st.sidebar:
     )
     rand_prefix = st.text_input(
         "Comment prefix", "rnd", disabled=not rand_on,
-        help="Rendered as <!-- prefix:XXXX --> in the source."
     )
 
     st.subheader("Hidden script content")
@@ -957,19 +1031,16 @@ with st.sidebar:
 with st.spinner("Parsing blocks…"):
     blocks = parse_blocks(bulk_text)
 
-# Original mojibake (cp1252 approximation)
 if moji_on:
     blocks = [{**b, "body": to_mojibake(b["body"]), "headline": to_mojibake(b["headline"])}
               for b in blocks]
     intro = to_mojibake(intro)
     hero_headline = to_mojibake(hero_headline)
 
-# Numeric entity encoding
 if ent_on:
     blocks = [{**b, "body": to_numeric_entities(b["body"], ent_rate)} for b in blocks]
     intro = to_numeric_entities(intro, ent_rate)
 
-# Script mojibake (charset round-trip)
 if sm_on:
     blocks = [{**b,
                "headline": to_script_mojibake(b["headline"], sm_preset),
@@ -978,7 +1049,6 @@ if sm_on:
     intro = to_script_mojibake(intro, sm_preset)
     hero_headline = to_script_mojibake(hero_headline, sm_preset)
 
-# Unicode escape sequences
 if ue_on:
     blocks = [{**b,
                "headline": to_unicode_escape(b["headline"], ue_style, ue_rate, ue_skip_ascii),
@@ -1014,10 +1084,20 @@ for line in prods_text.splitlines():
     elif len(parts) == 2:
         products.append((parts[0], parts[1], "{ourl}"))
 
-# Resolve repeated-macro selection into an actual list
+# Resolve repeated-macro selection
 rm_macros_final = [m for m in rm_sel if m != "(custom)"]
 if "(custom)" in rm_sel and rm_custom.strip():
     rm_macros_final.append(rm_custom.strip())
+
+# Resolve spacer runs per position
+sp_unit = SPACER_CHARS[sp_char_label] if sp_on else ""
+def _mk_spacer():
+    return build_spacer_run(sp_unit, int(sp_count), sp_wrap) if sp_on else ""
+
+preheader_spacer  = _mk_spacer() if "Preheader tail" in sp_positions else ""
+sp_start_run      = _mk_spacer() if "Start of body" in sp_positions else ""
+sp_end_run        = _mk_spacer() if "End of body" in sp_positions else ""
+sp_between_run    = _mk_spacer() if "Between each article block" in sp_positions else ""
 
 C = dict(
     subject=subject, accent=accent, page_bg=page_bg,
@@ -1026,6 +1106,7 @@ C = dict(
     hero_headline=hero_headline, hero_sub=hero_sub, hero_cta=hero_cta,
     hero_url=hero_url, hero_bg=hero_bg,
     preheader=preheader if add_hidden else "",
+    preheader_spacer=preheader_spacer if add_hidden else "",
     intro=intro, blocks=blocks,
     default_cta=default_cta, default_url=default_url,
     products=products, grid_title=grid_title, grid_cols=int(grid_cols),
@@ -1040,6 +1121,9 @@ C = dict(
     rm_sep=MACRO_SEPARATORS[rm_sep_label], rm_wrap=rm_wrap,
     rm_placement=rm_placement, rm_every=int(rm_every),
     rm_interleave=rm_interleave,
+    sp_start_run=sp_start_run,
+    sp_end_run=sp_end_run,
+    sp_between_run=sp_between_run,
 )
 
 with st.spinner("Building HTML & EML…"):
@@ -1048,7 +1132,7 @@ with st.spinner("Building HTML & EML…"):
                         encode_subject, base64_body, extra_headers)
 
 # ----------------------------------------------------------------------------
-# Metrics + downloads (always visible, above tabs)
+# Metrics + downloads
 # ----------------------------------------------------------------------------
 lines = html_out.count("\n") + 1
 m1, m2, m3, m4 = st.columns(4)
