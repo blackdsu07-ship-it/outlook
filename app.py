@@ -115,6 +115,7 @@ MACRO_SEPARATORS = {
 
 MACRO_WRAPPERS = [
     "Hidden span",
+    "CSS class (display:none; opacity:0)",
     "Visible inline",
     "HTML comment",
     "Plain (no wrap)",
@@ -126,6 +127,27 @@ MACRO_PLACEMENTS = [
     "Both ends",
     "Every N lines",
 ]
+
+# CSS class name used by the "CSS class" wrapper. Rule is emitted in <head>.
+HIDDEN_CLASS = "mc-hidden"
+
+# The reusable hidden-content CSS rule (goes inside the <style> block in <head>).
+HIDDEN_CSS_RULE = (
+    f"  .{HIDDEN_CLASS}{{"
+    "opacity:0!important;"
+    "display:none!important;"
+    "visibility:hidden!important;"
+    "width:0!important;"
+    "height:0!important;"
+    "max-height:0!important;"
+    "max-width:0!important;"
+    "font-size:0!important;"
+    "line-height:0!important;"
+    "color:transparent!important;"
+    "overflow:hidden!important;"
+    "mso-hide:all!important;"
+    "}"
+)
 
 # ----------------------------------------------------------------------------
 # Text transforms
@@ -295,7 +317,7 @@ def build_macro_run(macros, reps_per, separator, wrapper, interleave=False):
        - macros: list of macro strings
        - reps_per: how many times each macro appears
        - separator: string inserted between every macro occurrence
-       - wrapper: Hidden span / Visible inline / HTML comment / Plain
+       - wrapper: Hidden span / CSS class / Visible inline / HTML comment / Plain
        - interleave: shuffle macros instead of grouping by type
     """
     if not macros or reps_per <= 0:
@@ -318,6 +340,8 @@ def build_macro_run(macros, reps_per, separator, wrapper, interleave=False):
             'max-height:0;max-width:0;opacity:0;overflow:hidden;'
             'mso-hide:all;">' + body + '</span>'
         )
+    if wrapper == "CSS class (display:none; opacity:0)":
+        return f'<span class="{HIDDEN_CLASS}">{body}</span>'
     if wrapper == "HTML comment":
         return f'<!-- {body} -->'
     if wrapper == "Plain (no wrap)":
@@ -381,7 +405,7 @@ def preheader_block(text):
     pad = ("&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;"
            "&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;"
            "&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;")
-    return (f'<div style="display:none;font-size:1px;color:#ffffff;line-height:1px;'
+    return (f'<div class="{HIDDEN_CLASS}" style="display:none;font-size:1px;color:#ffffff;line-height:1px;'
             f'max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">'
             f'{esc(text)}{pad}</div>')
 
@@ -596,6 +620,8 @@ def build_html(C):
     L.append('  a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font-size:inherit!important;font-family:inherit!important;font-weight:inherit!important;line-height:inherit!important;}')
     L.append('  .ExternalClass{width:100%;}')
     L.append('  .ExternalClass,.ExternalClass p,.ExternalClass span,.ExternalClass font,.ExternalClass td,.ExternalClass div{line-height:100%;}')
+    # --- hidden-content rule (opacity:0 + display:none) ---
+    L.append(HIDDEN_CSS_RULE)
     L.append('  @media only screen and (max-width:620px){')
     L.append('    .wrap{width:100%!important;max-width:100%!important;}')
     L.append('    .px{padding-left:18px!important;padding-right:18px!important;}')
@@ -886,8 +912,9 @@ with st.sidebar:
         index=0, disabled=not rm_on,
     )
     rm_wrap = st.selectbox(
-        "Wrapper", MACRO_WRAPPERS, index=0, disabled=not rm_on,
-        help="Hidden span keeps them invisible; Visible inline will render the tag literally.",
+        "Wrapper", MACRO_WRAPPERS, index=1, disabled=not rm_on,
+        help="'CSS class' uses the .mc-hidden rule (display:none; opacity:0) "
+             "in the <head>. 'Hidden span' uses inline styles only.",
     )
     rm_placement = st.selectbox(
         "Placement", MACRO_PLACEMENTS, index=0, disabled=not rm_on,
