@@ -1,5 +1,5 @@
 import streamlit as st
-import base64, random, uuid, re, quopri, html as htmlmod
+import base64, random, uuid, re, quopri, html as htmlmod, string
 from email.utils import formatdate
 
 st.set_page_config(page_title="Bulk Email Template Generator", page_icon="📧", layout="wide")
@@ -73,6 +73,33 @@ def to_numeric_entities(text, rate=1.0):
 def rfc2047_encode(subject):
     b64 = base64.b64encode(subject.encode("utf-8")).decode()
     return f"=?UTF-8?B?{b64}?="
+
+def rand_alpha(n, pool=string.ascii_letters + string.digits):
+    """Return a random alphanumeric string of length n."""
+    return "".join(random.choice(pool) for _ in range(n))
+
+def inject_random_strings(doc, count, min_len, max_len, prefix="rnd"):
+    """Sprinkle `count` random alphanumeric HTML comments through the <body>.
+    Invisible in email clients; visible in 'View source'."""
+    if count <= 0:
+        return doc
+    body_start = doc.find("<body")
+    body_end = doc.rfind("</body>")
+    if body_start < 0 or body_end < 0:
+        return doc
+
+    head, body, tail = doc[:body_start], doc[body_start:body_end], doc[body_end:]
+    lines = body.split("\n")
+    strings = [rand_alpha(random.randint(min_len, max_len)) for _ in range(count)]
+
+    # Pick random insertion slots (skip the very first line so we don't break <body ...>)
+    slots = list(range(1, max(2, len(lines))))
+    random.shuffle(slots)
+    picks = sorted(slots[:count], reverse=True)  # insert bottom-up so indices stay valid
+    for i, idx in enumerate(picks):
+        lines.insert(idx, f"<!-- {prefix}:{strings[i]} -->")
+
+    return head + "\n".join(lines) + tail
 
 def html_to_text(h):
     t = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', h, flags=re.S | re.I)
@@ -374,6 +401,16 @@ def build_html(C):
 
     doc = "\n".join(L)
 
+    # Inject random alphanumeric strings through the body (before padding)
+    if C.get("rand_on"):
+        doc = inject_random_strings(
+            doc,
+            C["rand_count"],
+            C["rand_min"],
+            C["rand_max"],
+            C["rand_prefix"],
+        )
+
     if C["pad_to"] and doc.count("\n") + 1 < C["pad_to"]:
         need = C["pad_to"] - (doc.count("\n") + 1)
         pad_lines = [f'<!-- filler line {i + 1} -->' for i in range(need)]
@@ -524,6 +561,17 @@ with st.sidebar:
         height=80,
     )
 
+    st.subheader("Random alphanumeric strings")
+    rand_on = st.checkbox("Inject random strings into HTML body", True)
+    rand_count = st.slider("How many", 1, 300, 40, step=1, disabled=not rand_on)
+    rand_min, rand_max = st.slider(
+        "Length range", 4, 40, (8, 16), disabled=not rand_on
+    )
+    rand_prefix = st.text_input(
+        "Comment prefix", "rnd", disabled=not rand_on,
+        help="Rendered as <!-- prefix:XXXX --> in the source."
+    )
+
     st.subheader("Length & display")
     pad_to = st.number_input("Pad output to at least N lines (0 = off)", 0, 20000, 1000, step=100)
     preview_blocks = st.slider("Max blocks rendered in Preview tab", 5, 100, 15, step=5)
@@ -586,6 +634,9 @@ C = dict(
     banner_headline=banner_headline, banner_cta=banner_cta, banner_url=banner_url,
     domain=domain, address=address, socials=socials, unsub_text=unsub_text,
     tracker=tracker, zalgo_on=zalgo_on, zalgo_n=zalgo_n, pad_to=int(pad_to),
+    rand_on=rand_on, rand_count=int(rand_count),
+    rand_min=int(rand_min), rand_max=int(rand_max),
+    rand_prefix=rand_prefix,
 )
 
 with st.spinner("Building HTML & EML…"):
