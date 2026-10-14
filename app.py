@@ -2,20 +2,16 @@ import streamlit as st
 import base64, random, uuid, re, quopri, html as htmlmod, string
 from email.utils import formatdate
 
-st.set_page_config(page_title="Bulk Email Template Generator", page_icon="📧", layout="wide")
+st.set_page_config(page_title="Email Utility Toolkit", page_icon="🧰", layout="wide")
 
-# ----------------------------------------------------------------------------
+# ============================================================================
 # Constants
-# ----------------------------------------------------------------------------
+# ============================================================================
 MERGE_TAGS = ["{name}", "{domain}", "{rurl}", "{ourl}", "{uurl}", "{iurl}"]
 
 ACCENTS = {
-    "Blue":   "#2457c5",
-    "Red":    "#d8342a",
-    "Green":  "#1f8a4c",
-    "Amber":  "#c47f00",
-    "Dark":   "#111111",
-    "Purple": "#6b3fa0",
+    "Blue":   "#2457c5", "Red":  "#d8342a", "Green": "#1f8a4c",
+    "Amber":  "#c47f00", "Dark": "#111111", "Purple": "#6b3fa0",
 }
 
 ZALGO_MARKS = [chr(c) for c in list(range(0x0300, 0x0310)) + list(range(0x0320, 0x0330))]
@@ -103,89 +99,30 @@ SCRIPT_SAMPLES = {
 }
 
 MACRO_SEPARATORS = {
-    "(none)":      "",
-    "space":       " ",
-    "&nbsp;":      "&nbsp;",
-    "<wbr>":       "<wbr>",
-    "&#8203;":     "&#8203;",
-    "newline":     "\n",
-    "<!-- -->":    "<!-- -->",
-    "comma":       ",",
+    "(none)": "", "space": " ", "&nbsp;": "&nbsp;", "<wbr>": "<wbr>",
+    "&#8203;": "&#8203;", "newline": "\n", "<!-- -->": "<!-- -->", "comma": ",",
 }
 
-MACRO_WRAPPERS = [
-    "Hidden span",
-    "CSS class (display:none; opacity:0)",
-    "Visible inline",
-    "HTML comment",
-    "Plain (no wrap)",
-]
-
-MACRO_PLACEMENTS = [
-    "Start of body",
-    "End of body",
-    "Both ends",
-    "Every N lines",
-]
-
-# --- spacer / content-push ---------------------------------------------------
 SPACER_CHARS = {
-    "&nbsp; (non-breaking space)":     "&nbsp;",
+    "&nbsp; (non-breaking space)":      "&nbsp;",
     "&zwnj;&nbsp; (preheader classic)": "&zwnj;&nbsp;",
-    "&#8203; (zero-width space)":      "&#8203;",
-    "&zwj; (zero-width joiner)":       "&zwj;",
-    "&emsp; (em space)":               "&emsp;",
-    "&ensp; (en space)":               "&ensp;",
-    "· (middle dot)":                   "·",
-    ". (period)":                       ".",
-    "• (bullet)":                       "•",
-    "– (en dash)":                      "–",
-    "— (em dash)":                      "—",
-    "_ (underscore)":                   "_",
+    "&#8203; (zero-width space)":       "&#8203;",
+    "&zwj; (zero-width joiner)":        "&zwj;",
+    "&emsp; (em space)":                "&emsp;",
+    "&ensp; (en space)":                "&ensp;",
+    "· (middle dot)":                    "·",
+    ". (period)":                        ".",
+    "• (bullet)":                        "•",
+    "– (en dash)":                       "–",
+    "— (em dash)":                       "—",
+    "_ (underscore)":                    "_",
 }
 
-SPACER_POSITIONS = [
-    "Preheader tail",
-    "Start of body",
-    "End of body",
-    "Between each article block",
-]
-
-SPACER_WRAPPERS = [
-    "Hidden span",
-    "CSS class (display:none; opacity:0)",
-    "Plain (no wrap)",
-]
-
-# CSS class name used by the "CSS class" wrapper. Rule is emitted in <head>.
 HIDDEN_CLASS = "mc-hidden"
 
-HIDDEN_CSS_RULE = (
-    f"  .{HIDDEN_CLASS}{{"
-    "opacity:0!important;"
-    "display:none!important;"
-    "visibility:hidden!important;"
-    "width:0!important;"
-    "height:0!important;"
-    "max-height:0!important;"
-    "max-width:0!important;"
-    "font-size:0!important;"
-    "line-height:0!important;"
-    "color:transparent!important;"
-    "overflow:hidden!important;"
-    "mso-hide:all!important;"
-    "}"
-)
-
-# ----------------------------------------------------------------------------
-# Text transforms
-# ----------------------------------------------------------------------------
-def esc(s):
-    return htmlmod.escape(str(s))
-
-def nl2br(s):
-    return esc(s).replace("\n", "<br>")
-
+# ============================================================================
+# Core transform functions (pure, reusable)
+# ============================================================================
 def to_mojibake(text):
     out = []
     for b in text.encode("utf-8"):
@@ -206,47 +143,31 @@ def zalgo(text, intensity=3):
 def to_numeric_entities(text, rate=1.0):
     return "".join(f"&#{ord(c)};" if (c.strip() and random.random() < rate) else c for c in text)
 
-def rfc2047_encode(subject):
-    b64 = base64.b64encode(subject.encode("utf-8")).decode()
-    return f"=?UTF-8?B?{b64}?="
+def to_script_mojibake(text, preset):
+    if preset not in MOJIBAKE_PRESETS:
+        return text
+    src, dst = MOJIBAKE_PRESETS[preset]
+    try:
+        if src == "__double__":
+            x = text.encode("utf-8").decode(dst, errors="replace")
+            return x.encode("utf-8").decode(dst, errors="replace")
+        if src == "__triple__":
+            x = text
+            for _ in range(3):
+                x = x.encode("utf-8").decode(dst, errors="replace")
+            return x
+        return text.encode(src, errors="replace").decode(dst, errors="replace")
+    except (LookupError, UnicodeError):
+        return text
 
-def rand_alpha(n, pool=string.ascii_letters + string.digits):
-    """Return a random alphanumeric string of length n."""
-    return "".join(random.choice(pool) for _ in range(n))
-
-def inject_random_strings(doc, count, min_len, max_len, prefix="rnd"):
-    if count <= 0:
-        return doc
-    body_start = doc.find("<body")
-    body_end = doc.rfind("</body>")
-    if body_start < 0 or body_end < 0:
-        return doc
-
-    head, body, tail = doc[:body_start], doc[body_start:body_end], doc[body_end:]
-    lines = body.split("\n")
-    strings = [rand_alpha(random.randint(min_len, max_len)) for _ in range(count)]
-
-    slots = list(range(1, max(2, len(lines))))
-    random.shuffle(slots)
-    picks = sorted(slots[:count], reverse=True)
-    for i, idx in enumerate(picks):
-        lines.insert(idx, f"<!-- {prefix}:{strings[i]} -->")
-
-    return head + "\n".join(lines) + tail
-
-# ---------------------------------------------------------------------------
-# Unicode escape sequences
-# ---------------------------------------------------------------------------
 def to_unicode_escape(text, style, rate=1.0, skip_ascii=True):
     out = []
     for ch in text:
         cp = ord(ch)
         if skip_ascii and ch.isascii() and (ch.isalnum() or ch in " .,!?-:;()[]{}'\"/\\\n"):
-            out.append(ch)
-            continue
+            out.append(ch); continue
         if rate < 1.0 and random.random() > rate:
-            out.append(ch)
-            continue
+            out.append(ch); continue
 
         if style.startswith("JS"):
             if cp > 0xFFFF:
@@ -271,35 +192,19 @@ def to_unicode_escape(text, style, rate=1.0, skip_ascii=True):
         elif style.startswith("U+"):
             out.append(f"U+{cp:04X}")
         elif style.startswith("Python"):
-            if cp < 0x100:
-                out.append(f"\\x{cp:02x}")
-            elif cp < 0x10000:
-                out.append(f"\\u{cp:04x}")
-            else:
-                out.append(f"\\U{cp:08x}")
+            if cp < 0x100: out.append(f"\\x{cp:02x}")
+            elif cp < 0x10000: out.append(f"\\u{cp:04x}")
+            else: out.append(f"\\U{cp:08x}")
         else:
             out.append(ch)
     return "".join(out)
 
-# ---------------------------------------------------------------------------
-# Script mojibake
-# ---------------------------------------------------------------------------
-def to_script_mojibake(text, preset):
-    if preset not in MOJIBAKE_PRESETS:
-        return text
-    src, dst = MOJIBAKE_PRESETS[preset]
-    try:
-        if src == "__double__":
-            x = text.encode("utf-8").decode(dst, errors="replace")
-            return x.encode("utf-8").decode(dst, errors="replace")
-        if src == "__triple__":
-            x = text
-            for _ in range(3):
-                x = x.encode("utf-8").decode(dst, errors="replace")
-            return x
-        return text.encode(src, errors="replace").decode(dst, errors="replace")
-    except (LookupError, UnicodeError):
-        return text
+def rfc2047_encode(subject):
+    b64 = base64.b64encode(subject.encode("utf-8")).decode()
+    return f"=?UTF-8?B?{b64}?="
+
+def rand_alpha(n, pool=string.ascii_letters + string.digits):
+    return "".join(random.choice(pool) for _ in range(n))
 
 def rand_script_string(script, min_len=8, max_len=24):
     sample = SCRIPT_SAMPLES.get(script)
@@ -309,131 +214,275 @@ def rand_script_string(script, min_len=8, max_len=24):
     start = random.randint(0, max(0, len(sample) - n))
     return sample[start:start + n].replace("--", "\u2010\u2010")
 
-def inject_script_content(doc, count, script, prefix="txt"):
-    if count <= 0:
-        return doc
-    body_start = doc.find("<body")
-    body_end = doc.rfind("</body>")
-    if body_start < 0 or body_end < 0:
-        return doc
-
-    head, body, tail = doc[:body_start], doc[body_start:body_end], doc[body_end:]
-    lines = body.split("\n")
-    strings = [rand_script_string(script) for _ in range(count)]
-
-    slots = list(range(1, max(2, len(lines))))
-    random.shuffle(slots)
-    picks = sorted(slots[:count], reverse=True)
-    for i, idx in enumerate(picks):
-        lines.insert(idx, f"<!-- {prefix}:{strings[i]} -->")
-
-    return head + "\n".join(lines) + tail
-
-# ---------------------------------------------------------------------------
-# Content push / spacer
-# ---------------------------------------------------------------------------
-def build_spacer_run(unit, count, wrapper):
-    """Build a spacer run: `count` copies of `unit`, wrapped as requested."""
+def build_spacer_run(unit, count):
     if not unit or count <= 0:
         return ""
-    body = unit * int(count)
-    if wrapper == "Hidden span":
-        return (
-            '<span style="display:none;font-size:0;line-height:0;'
-            'max-height:0;max-width:0;opacity:0;overflow:hidden;'
-            'mso-hide:all;">' + body + '</span>'
-        )
-    if wrapper == "CSS class (display:none; opacity:0)":
-        return f'<span class="{HIDDEN_CLASS}">{body}</span>'
-    return body  # Plain
+    return unit * int(count)
 
-def inject_at_position(doc, snippet, position):
-    """Insert `snippet` at Start/End of body. Returns doc unchanged otherwise."""
-    if not snippet:
-        return doc
-    if position == "Start of body":
-        i = doc.find("<body")
-        if i < 0:
-            return doc
-        i = doc.find(">", i) + 1
-        return doc[:i] + "\n" + snippet + "\n" + doc[i:]
-    if position == "End of body":
-        i = doc.rfind("</body>")
-        if i < 0:
-            return doc
-        return doc[:i] + snippet + "\n" + doc[i:]
-    return doc
-
-# ---------------------------------------------------------------------------
-# Repeated macros
-# ---------------------------------------------------------------------------
-def build_macro_run(macros, reps_per, separator, wrapper, interleave=False):
+def build_macro_run(macros, reps_per, separator, interleave=False):
     if not macros or reps_per <= 0:
         return ""
-
     if interleave:
         pool = macros * int(reps_per)
         random.shuffle(pool)
-        parts = pool
-    else:
-        parts = []
-        for m in macros:
-            parts.extend([m] * int(reps_per))
+        return separator.join(pool)
+    parts = []
+    for m in macros:
+        parts.extend([m] * int(reps_per))
+    return separator.join(parts)
 
-    body = separator.join(parts)
+# ============================================================================
+# UI — one tab per generator
+# ============================================================================
+st.title("🧰 Email Utility Toolkit")
+st.caption("Each tab is a standalone generator. Pick a tool, put input in, take output out.")
 
-    if wrapper == "Hidden span":
-        return (
-            '<span style="display:none;font-size:0;line-height:0;'
-            'max-height:0;max-width:0;opacity:0;overflow:hidden;'
-            'mso-hide:all;">' + body + '</span>'
+tabs = st.tabs([
+    "🔤 Mojibake",
+    "🌍 Script Mojibake",
+    "🔢 Unicode Escapes",
+    "🌀 Zalgo",
+    "📜 Numeric Entities",
+    "🎲 Random Strings",
+    "✍️ Script Content",
+    "🔁 Repeated Macros",
+    "⬛ Spacers",
+    "📧 Email Builder",
+])
+
+# ---------------------------------------------------------------------------
+# TAB 1 — Mojibake
+# ---------------------------------------------------------------------------
+with tabs[0]:
+    st.header("Mojibake Generator")
+    st.caption("UTF-8 text read back as cp1252 — produces the classic `Ã©`-style garble.")
+
+    src = st.text_area(
+        "Input text",
+        value="Café — naïve résumé · 你好 · مرحبا",
+        height=140,
+        key="mj_in",
+    )
+    out = to_mojibake(src)
+    st.text_area("Mojibake output", value=out, height=140, key="mj_out")
+    st.download_button("⬇ Download .txt", out, file_name="mojibake.txt",
+                       mime="text/plain", use_container_width=False)
+
+# ---------------------------------------------------------------------------
+# TAB 2 — Script Mojibake
+# ---------------------------------------------------------------------------
+with tabs[1]:
+    st.header("Script Mojibake Generator")
+    st.caption("Round-trip text through a source charset, decode as a different one.")
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        preset = st.selectbox("Preset", list(MOJIBAKE_PRESETS.keys()),
+                              index=0, key="sm_preset")
+    with c2:
+        src = st.text_area("Input text",
+                           value="Café — naïve · 你好 · مرحبا · Привет · Γειά",
+                           height=140, key="sm_in")
+
+    out = to_script_mojibake(src, preset)
+    st.text_area("Output", value=out, height=180, key="sm_out")
+    st.download_button("⬇ Download .txt", out, file_name="script_mojibake.txt",
+                       mime="text/plain")
+
+# ---------------------------------------------------------------------------
+# TAB 3 — Unicode Escapes
+# ---------------------------------------------------------------------------
+with tabs[2]:
+    st.header("Unicode Escape Generator")
+    st.caption("Escape characters as `\\uXXXX`, `\\u{…}`, HTML entities, `U+…`, Python, or JSON.")
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        style = st.selectbox("Escape style", UNICODE_ESCAPE_STYLES, index=0, key="ue_style")
+    with c2:
+        rate = st.slider("Escape rate", 0.1, 1.0, 1.0, step=0.1, key="ue_rate")
+    with c3:
+        skip_ascii = st.checkbox("Leave ASCII words", True, key="ue_skip")
+
+    src = st.text_area("Input text",
+                       value="Hello 世界 — Café — مرحبا — Γειά",
+                       height=140, key="ue_in")
+    out = to_unicode_escape(src, style, rate, skip_ascii)
+    st.text_area("Output", value=out, height=180, key="ue_out")
+    st.download_button("⬇ Download .txt", out, file_name="unicode_escaped.txt",
+                       mime="text/plain")
+
+# ---------------------------------------------------------------------------
+# TAB 4 — Zalgo
+# ---------------------------------------------------------------------------
+with tabs[3]:
+    st.header("Zalgo Generator")
+    st.caption("Piles combining diacritics on each character.")
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        src = st.text_area("Input text", value="Hello World", height=140, key="zg_in")
+    with c2:
+        intensity = st.slider("Intensity", 1, 20, 5, key="zg_int")
+
+    out = zalgo(src, intensity)
+    st.text_area("Output", value=out, height=180, key="zg_out")
+    st.download_button("⬇ Download .txt", out, file_name="zalgo.txt", mime="text/plain")
+
+# ---------------------------------------------------------------------------
+# TAB 5 — Numeric Entities
+# ---------------------------------------------------------------------------
+with tabs[4]:
+    st.header("Numeric Entity Generator")
+    st.caption("Encodes characters as `&#NNNN;` HTML entities. These render as the original characters.")
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        src = st.text_area("Input text", value="Hello World — café 你好", height=140, key="ne_in")
+    with c2:
+        rate = st.slider("Encode rate", 0.1, 1.0, 1.0, step=0.1, key="ne_rate")
+
+    out = to_numeric_entities(src, rate)
+    st.text_area("Output", value=out, height=180, key="ne_out")
+    st.download_button("⬇ Download .txt", out, file_name="entities.txt", mime="text/plain")
+
+# ---------------------------------------------------------------------------
+# TAB 6 — Random Strings
+# ---------------------------------------------------------------------------
+with tabs[5]:
+    st.header("Random Alphanumeric String Generator")
+    st.caption("Generates random strings. Choose one-per-line or joined.")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        count = st.number_input("How many strings", 1, 5000, 40, step=1, key="rs_count")
+    with c2:
+        min_len, max_len = st.slider("Length range", 4, 64, (8, 16), key="rs_len")
+    with c3:
+        pool_label = st.selectbox(
+            "Character pool",
+            ["letters + digits", "letters only", "digits only",
+             "lowercase + digits", "uppercase + digits", "hex"],
+            key="rs_pool",
         )
-    if wrapper == "CSS class (display:none; opacity:0)":
-        return f'<span class="{HIDDEN_CLASS}">{body}</span>'
-    if wrapper == "HTML comment":
-        return f'<!-- {body} -->'
-    if wrapper == "Plain (no wrap)":
-        return body
-    return body
 
-def inject_macro_run(doc, run, placement, every_n=20):
-    if not run:
-        return doc
+    pools = {
+        "letters + digits":   string.ascii_letters + string.digits,
+        "letters only":       string.ascii_letters,
+        "digits only":        string.digits,
+        "lowercase + digits": string.ascii_lowercase + string.digits,
+        "uppercase + digits": string.ascii_uppercase + string.digits,
+        "hex":                "0123456789abcdef",
+    }
 
-    if placement == "Start of body":
-        i = doc.find("<body")
-        if i < 0:
-            return doc
-        i = doc.find(">", i) + 1
-        return doc[:i] + "\n" + run + "\n" + doc[i:]
+    if st.button("🎲 Generate", key="rs_go"):
+        strings = [rand_alpha(random.randint(min_len, max_len), pools[pool_label])
+                   for _ in range(int(count))]
+        st.session_state["rs_output"] = strings
 
-    if placement == "End of body":
-        i = doc.rfind("</body>")
-        if i < 0:
-            return doc
-        return doc[:i] + run + "\n" + doc[i:]
+    strings = st.session_state.get("rs_output", [])
+    as_lines = "\n".join(strings)
+    st.text_area("Output (one per line)", value=as_lines, height=220, key="rs_out")
+    if strings:
+        st.download_button("⬇ Download .txt", as_lines, file_name="random_strings.txt",
+                           mime="text/plain")
+        st.caption(f"{len(strings):,} strings · {sum(len(s) for s in strings):,} chars total")
 
-    if placement == "Both ends":
-        i = doc.find("<body")
-        if i >= 0:
-            i = doc.find(">", i) + 1
-            doc = doc[:i] + "\n" + run + "\n" + doc[i:]
-        j = doc.rfind("</body>")
-        if j >= 0:
-            doc = doc[:j] + run + "\n" + doc[j:]
-        return doc
+# ---------------------------------------------------------------------------
+# TAB 7 — Script Content
+# ---------------------------------------------------------------------------
+with tabs[6]:
+    st.header("Real Script Content Generator")
+    st.caption("Outputs real text in Arabic, Chinese, Japanese, etc. Good for filling templates.")
 
-    if placement == "Every N lines":
-        n = max(2, int(every_n))
-        lines = doc.split("\n")
-        out = []
-        for idx, line in enumerate(lines):
-            out.append(line)
-            if idx > 0 and idx % n == 0:
-                out.append(run)
-        return "\n".join(out)
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        script = st.selectbox("Script", list(SCRIPT_SAMPLES.keys()), key="sc_script")
+    with c2:
+        n = st.number_input("How many strings", 1, 1000, 20, step=1, key="sc_count")
 
-    return doc
+    if st.button("✍️ Generate", key="sc_go"):
+        st.session_state["sc_output"] = [rand_script_string(script) for _ in range(int(n))]
+
+    strings = st.session_state.get("sc_output", [])
+    as_lines = "\n".join(strings)
+    st.text_area("Output (one per line)", value=as_lines, height=220, key="sc_out")
+    if strings:
+        st.download_button("⬇ Download .txt", as_lines, file_name="script_content.txt",
+                           mime="text/plain")
+
+# ---------------------------------------------------------------------------
+# TAB 8 — Repeated Macros
+# ---------------------------------------------------------------------------
+with tabs[7]:
+    st.header("Repeated Macro Generator")
+    st.caption("Repeats merge tags. Output is just the run — no wrapper, no HTML.")
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        selected = st.multiselect(
+            "Macros to repeat",
+            options=MERGE_TAGS + ["(custom)"],
+            default=["{name}"], key="rm_sel",
+        )
+    with c2:
+        reps = st.number_input("Reps per macro", 1, 2000, 20, step=1, key="rm_reps")
+
+    custom = st.text_input("Custom macro (used if '(custom)' is selected)",
+                           "", key="rm_custom",
+                           disabled="(custom)" not in selected)
+
+    macros = [m for m in selected if m != "(custom)"]
+    if "(custom)" in selected and custom.strip():
+        macros.append(custom.strip())
+
+    c1, c2 = st.columns(2)
+    with c1:
+        sep_label = st.selectbox("Separator", list(MACRO_SEPARATORS.keys()),
+                                 index=0, key="rm_sep")
+    with c2:
+        interleave = st.checkbox("Interleave (shuffle)", False, key="rm_int")
+
+    if st.button("🔁 Generate", key="rm_go"):
+        st.session_state["rm_output"] = build_macro_run(
+            macros, int(reps), MACRO_SEPARATORS[sep_label], interleave)
+
+    out = st.session_state.get("rm_output", "")
+    st.text_area("Output", value=out, height=200, key="rm_out")
+    if out:
+        st.download_button("⬇ Download .txt", out, file_name="macros.txt", mime="text/plain")
+        st.caption(f"{len(out):,} chars · {out.count(chr(10))+1:,} lines")
+
+# ---------------------------------------------------------------------------
+# TAB 9 — Spacers
+# ---------------------------------------------------------------------------
+with tabs[8]:
+    st.header("Spacer Generator")
+    st.caption("Repeating spacer characters — for preheader tail padding or content push.")
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        char_label = st.selectbox("Spacer character", list(SPACER_CHARS.keys()),
+                                  index=1, key="sp_char")
+    with c2:
+        n = st.number_input("How many", 1, 10000, 60, step=1, key="sp_count")
+
+    out = build_spacer_run(SPACER_CHARS[char_label], int(n))
+    st.text_area("Output", value=out, height=200, key="sp_out")
+    st.download_button("⬇ Download .txt", out, file_name="spacers.txt", mime="text/plain")
+    st.caption(f"{len(out):,} chars")
+
+# ---------------------------------------------------------------------------
+# TAB 10 — Email Builder (the combined one, on demand)
+# ---------------------------------------------------------------------------
+# (compact re-implementation of the earlier combined tool — same features,
+#  but now opt-in rather than the default output)
+
+def esc(s):
+    return htmlmod.escape(str(s))
+
+def nl2br(s):
+    return esc(s).replace("\n", "<br>")
 
 def html_to_text(h):
     t = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', h, flags=re.S | re.I)
@@ -445,162 +494,29 @@ def html_to_text(h):
     t = re.sub(r'\n{3,}', '\n\n', t)
     return t.strip()
 
-# ----------------------------------------------------------------------------
-# HTML block builders
-# ----------------------------------------------------------------------------
-def preheader_block(text, extra_pad=""):
-    pad = ("&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;"
-           "&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;"
-           "&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;")
-    return (f'<div class="{HIDDEN_CLASS}" style="display:none;font-size:1px;color:#ffffff;line-height:1px;'
-            f'max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">'
-            f'{esc(text)}{pad}{extra_pad}</div>')
-
-def header_block(brand, tagline, nav, bg, fg):
-    L = []
-    L.append(f'<tr><td style="background:{bg};padding:22px 28px 18px;">')
-    L.append(f'  <div style="font:800 22px/1.2 Arial,Helvetica,sans-serif;color:{fg};letter-spacing:.4px;">{esc(brand)}</div>')
-    if tagline:
-        L.append(f'  <div style="font:400 12px/1.5 Arial,Helvetica,sans-serif;color:{fg};opacity:.65;margin-top:5px;">{esc(tagline)}</div>')
-    L.append('</td></tr>')
-    if nav:
-        cells = "".join(
-            f'<td style="padding:0 9px;font:600 12px Arial,Helvetica,sans-serif;">'
-            f'<a href="{u}" style="color:{fg};text-decoration:none;opacity:.85;">{esc(l)}</a></td>'
-            for l, u in nav
-        )
-        L.append(f'<tr><td style="background:{bg};padding:0 19px 16px;">'
-                 f'<table role="presentation" cellpadding="0" cellspacing="0"><tr>{cells}</tr></table>'
-                 f'</td></tr>')
-    return "\n".join(L)
-
-def hero_block(headline, sub, cta, url, accent, bg="#0f172a", fg="#ffffff"):
-    L = []
-    L.append(f'<tr><td style="background:{bg};padding:44px 28px 40px;" align="center">')
-    L.append(f'  <div style="font:800 30px/1.2 Arial,Helvetica,sans-serif;color:{fg};max-width:480px;">{esc(headline)}</div>')
-    if sub:
-        L.append(f'  <div style="font:400 15px/1.6 Arial,Helvetica,sans-serif;color:{fg};opacity:.78;margin-top:14px;max-width:440px;">{esc(sub)}</div>')
-    if cta:
-        L.append(f'  <div style="margin-top:26px;"><a href="{url or "{rurl}"}" '
-                 f'style="display:inline-block;background:{accent};color:#ffffff;text-decoration:none;'
-                 f'font:700 14px Arial,Helvetica,sans-serif;padding:13px 30px;border-radius:4px;">{esc(cta)}</a></div>')
-    L.append('</td></tr>')
-    return "\n".join(L)
-
-def divider_block(pad="0 28px", color="#ececec"):
-    return (f'<tr><td style="padding:{pad};">'
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
-            f'<td style="border-top:1px solid {color};font-size:0;line-height:0;height:1px;">&nbsp;</td>'
-            f'</tr></table></td></tr>')
-
-def article_block(idx, headline, body, cta, url, accent, rule=True):
-    L = []
-    if rule:
-        L.append(divider_block())
-    L.append(f'<tr><td style="padding:24px 28px 6px;font:700 19px/1.35 Arial,Helvetica,sans-serif;color:#111111;">'
-             f'{esc(headline)}</td></tr>')
-    if body:
-        L.append(f'<tr><td style="padding:0 28px 16px;font:400 15px/1.68 Arial,Helvetica,sans-serif;color:#3a3a3a;">'
-                 f'{nl2br(body)}</td></tr>')
-    if cta:
-        L.append(f'<tr><td style="padding:0 28px 24px;">'
-                 f'<a href="{url or "{rurl}"}" style="display:inline-block;background:{accent};color:#ffffff;'
-                 f'text-decoration:none;font:700 13px Arial,Helvetica,sans-serif;padding:11px 22px;'
-                 f'border-radius:4px;">{esc(cta)}</a></td></tr>')
-    return "\n".join(L)
-
-def grid_block(items, accent, cols=2, title=None):
-    L = []
-    if title:
-        L.append(f'<tr><td style="padding:26px 28px 4px;font:700 17px/1.3 Arial,Helvetica,sans-serif;color:#111111;">'
-                 f'{esc(title)}</td></tr>')
-    L.append('<tr><td style="padding:8px 20px 20px;">')
-    L.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0">')
-    for r in range(0, len(items), cols):
-        L.append('<tr>')
-        for c in range(cols):
-            i = r + c
-            if i < len(items):
-                t, p, u = items[i]
-                L.append(f'<td width="{100 // cols}%" valign="top" style="padding:8px;">')
-                L.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                         'style="border:1px solid #ececec;border-radius:6px;">')
-                L.append(f'<tr><td style="padding:16px;">')
-                L.append(f'<div style="font:700 15px/1.35 Arial,Helvetica,sans-serif;color:#111111;">{esc(t)}</div>')
-                L.append(f'<div style="font:700 14px/1.4 Arial,Helvetica,sans-serif;color:{accent};margin-top:7px;">{esc(p)}</div>')
-                L.append(f'<div style="margin-top:11px;"><a href="{u}" style="color:{accent};'
-                         f'font:600 12px Arial,Helvetica,sans-serif;text-decoration:none;">Shop &rarr;</a></div>')
-                L.append('</td></tr></table></td>')
-            else:
-                L.append(f'<td width="{100 // cols}%">&nbsp;</td>')
-        L.append('</tr>')
-    L.append('</table>')
-    L.append('</td></tr>')
-    return "\n".join(L)
-
-def banner_block(headline, cta, url, accent, bg="#f5f7fb"):
-    L = []
-    L.append(f'<tr><td style="background:{bg};padding:34px 28px;" align="center">')
-    L.append(f'<div style="font:800 21px/1.3 Arial,Helvetica,sans-serif;color:#111111;">{esc(headline)}</div>')
-    L.append(f'<div style="margin-top:18px;"><a href="{url or "{rurl}"}" '
-             f'style="display:inline-block;background:{accent};color:#ffffff;text-decoration:none;'
-             f'font:700 14px Arial,Helvetica,sans-serif;padding:13px 30px;border-radius:30px;">{esc(cta)}</a></div>')
-    L.append('</td></tr>')
-    return "\n".join(L)
-
-def footer_block(domain, address, socials, unsub, accent):
-    L = []
-    L.append('<tr><td style="padding:30px 28px 8px;border-top:1px solid #ececec;" align="center">')
-    L.append('<table role="presentation" cellpadding="0" cellspacing="0"><tr>')
-    for label, u in socials:
-        L.append(f'<td style="padding:0 7px;"><a href="{u}" style="font:600 12px Arial,Helvetica,sans-serif;'
-                 f'color:#8a8a8a;text-decoration:none;">{esc(label)}</a></td>')
-    L.append('</tr></table>')
-    L.append('</td></tr>')
-    L.append(f'<tr><td style="padding:14px 28px 6px;font:400 12px/1.7 Arial,Helvetica,sans-serif;'
-             f'color:#9a9a9a;text-align:center;">{esc(address)}</td></tr>')
-    L.append(f'<tr><td style="padding:0 28px 30px;font:400 12px/1.7 Arial,Helvetica,sans-serif;'
-             f'color:#9a9a9a;text-align:center;">'
-             f'<a href="{{{{uurl}}}}" style="color:{accent};text-decoration:underline;">{esc(unsub)}</a>'
-             f' &nbsp;·&nbsp; <a href="{{{{ourl}}}}" style="color:{accent};text-decoration:underline;">View in browser</a>'
-             f'</td></tr>')
-    return "\n".join(L)
-
-# ----------------------------------------------------------------------------
-# Bulk content parser
-# ----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_blocks(text):
     blocks, cur, started = [], {"headline": "", "body": [], "cta": "", "url": ""}, False
-
     def flush():
         nonlocal cur, started
         if started and (cur["headline"] or cur["body"]):
             blocks.append({"headline": cur["headline"],
                            "body": "\n".join(cur["body"]).strip(),
-                           "cta": cur["cta"],
-                           "url": cur["url"]})
+                           "cta": cur["cta"], "url": cur["url"]})
         cur = {"headline": "", "body": [], "cta": "", "url": ""}
         started = False
-
     for raw in text.splitlines():
         s = raw.strip()
         if re.fullmatch(r'-{3,}', s):
-            flush()
-            continue
-        if not s:
-            continue
+            flush(); continue
+        if not s: continue
         if s.startswith("#"):
-            if started and (cur["headline"] or cur["body"]):
-                flush()
-            cur["headline"] = s.lstrip("#").strip()
-            started = True
+            if started and (cur["headline"] or cur["body"]): flush()
+            cur["headline"] = s.lstrip("#").strip(); started = True
         elif s.startswith(">"):
-            cur["cta"] = s.lstrip(">").strip()
-            started = True
+            cur["cta"] = s.lstrip(">").strip(); started = True
         elif s.startswith("@"):
-            cur["url"] = s.lstrip("@").strip()
-            started = True
+            cur["url"] = s.lstrip("@").strip(); started = True
         elif "|" in s and not cur["headline"] and not cur["body"]:
             parts = [p.strip() for p in s.split("|")]
             cur["headline"] = parts[0]
@@ -609,9 +525,7 @@ def parse_blocks(text):
             if len(parts) > 3: cur["url"] = parts[3]
             started = True
         else:
-            cur["body"].append(s)
-            started = True
-
+            cur["body"].append(s); started = True
     flush()
     return blocks
 
@@ -621,587 +535,231 @@ def demo_content(n):
     for i in range(1, n + 1):
         out.append(f"# {random.choice(TOPICS)} — vol. {i}")
         out.append(" ".join(random.sample(LOREM, k=random.randint(2, 4))))
-        out.append("")
-        out.append("> Read the full story")
-        out.append("@ {rurl}")
-        out.append("---")
+        out.append(""); out.append("> Read the full story")
+        out.append("@ {rurl}"); out.append("---")
     return "\n".join(out)
 
-@st.cache_data(show_spinner=False)
-def demo_products(n):
-    out = []
-    for i in range(1, n + 1):
-        out.append(f"Product {i} | ${random.randint(9, 199)}.00 | {{ourl}}")
-    return "\n".join(out)
+def preheader_block(text):
+    pad = ("&zwnj;&nbsp;" * 18)
+    return (f'<div style="display:none;font-size:1px;color:#ffffff;line-height:1px;'
+            f'max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">'
+            f'{esc(text)}{pad}</div>')
 
-# ----------------------------------------------------------------------------
-# Full document assembly
-# ----------------------------------------------------------------------------
 def build_html(C):
-    L = []
-    A = C["accent"]
-
-    L.append('<!DOCTYPE html>')
-    L.append('<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" '
-             'xmlns:o="urn:schemas-microsoft-com:office:office">')
-    L.append('<head>')
-    L.append('<meta charset="utf-8">')
+    L, A = [], C["accent"]
+    L.append('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">')
     L.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
-    L.append('<meta name="x-apple-disable-message-reformatting">')
-    L.append('<meta name="format-detection" content="telephone=no,address=no,email=no,date=no">')
     L.append('<meta name="color-scheme" content="light only">')
-    L.append('<meta name="supported-color-schemes" content="light only">')
     L.append(f'<title>{esc(C["subject"])}</title>')
-    L.append('<!--[if mso]>')
-    L.append('<xml><o:OfficeDocumentSettings>')
-    L.append('<o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch>')
-    L.append('</o:OfficeDocumentSettings></xml>')
-    L.append('<![endif]-->')
     L.append('<style type="text/css">')
-    L.append('  html,body{margin:0!important;padding:0!important;height:100%!important;width:100%!important;}')
-    L.append('  *{-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%;}')
-    L.append('  table,td{mso-table-lspace:0pt!important;mso-table-rspace:0pt!important;}')
-    L.append('  table{border-spacing:0!important;border-collapse:collapse!important;table-layout:fixed!important;margin:0 auto!important;}')
-    L.append('  img{-ms-interpolation-mode:bicubic;border:0;height:auto;line-height:100%;outline:none;text-decoration:none;}')
-    L.append('  a{text-decoration:none;}')
-    L.append('  a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important;font-size:inherit!important;font-family:inherit!important;font-weight:inherit!important;line-height:inherit!important;}')
-    L.append('  .ExternalClass{width:100%;}')
-    L.append('  .ExternalClass,.ExternalClass p,.ExternalClass span,.ExternalClass font,.ExternalClass td,.ExternalClass div{line-height:100%;}')
-    L.append(HIDDEN_CSS_RULE)
-    L.append('  @media only screen and (max-width:620px){')
-    L.append('    .wrap{width:100%!important;max-width:100%!important;}')
-    L.append('    .px{padding-left:18px!important;padding-right:18px!important;}')
-    L.append('    .h1{font-size:24px!important;line-height:1.25!important;}')
-    L.append('    .stack{display:block!important;width:100%!important;}')
-    L.append('  }')
-    L.append('  @media (prefers-color-scheme:dark){')
-    L.append('    .dm-bg{background:#111111!important;}')
-    L.append('    .dm-fg{color:#f2f2f2!important;}')
-    L.append('  }')
-    L.append('</style>')
-    L.append('</head>')
+    L.append('  html,body{margin:0!important;padding:0!important;}')
+    L.append('  table{border-collapse:collapse!important;table-layout:fixed!important;margin:0 auto!important;}')
+    L.append(f'  .{HIDDEN_CLASS}{{opacity:0!important;display:none!important;'
+             'visibility:hidden!important;width:0!important;height:0!important;'
+             'max-height:0!important;max-width:0!important;font-size:0!important;'
+             'line-height:0!important;color:transparent!important;overflow:hidden!important;'
+             'mso-hide:all!important;}')
+    L.append('</style></head>')
     L.append(f'<body style="margin:0;padding:0;background:{C["page_bg"]};'
-             f'font-family:Arial,Helvetica,sans-serif;">')
-
+             'font-family:Arial,Helvetica,sans-serif;">')
     if C["preheader"]:
-        L.append(preheader_block(C["preheader"], C.get("preheader_spacer", "")))
-
-    L.append(f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
-             f'style="background:{C["page_bg"]};">')
-    L.append('<tr><td align="center" style="padding:24px 12px;">')
-    L.append('<!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->')
-    L.append('<table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" border="0" '
-             'style="width:600px;max-width:600px;background:#ffffff;border-radius:8px;overflow:hidden;">')
-
-    L.append(header_block(C["brand"], C["tagline"], C["nav"], C["header_bg"], C["header_fg"]))
-
+        L.append(preheader_block(C["preheader"]))
+    L.append(f'<table role="presentation" width="100%" style="background:{C["page_bg"]};"><tr>'
+             '<td align="center" style="padding:24px 12px;">')
+    L.append('<table role="presentation" width="600" style="width:600px;max-width:600px;'
+             'background:#ffffff;border-radius:8px;overflow:hidden;">')
+    # header
+    L.append(f'<tr><td style="background:{C["header_bg"]};padding:22px 28px 18px;">'
+             f'<div style="font:800 22px/1.2 Arial,Helvetica,sans-serif;color:{C["header_fg"]};">'
+             f'{esc(C["brand"])}</div>'
+             f'<div style="font:400 12px/1.5 Arial,Helvetica,sans-serif;color:{C["header_fg"]};'
+             f'opacity:.65;margin-top:5px;">{esc(C["tagline"])}</div></td></tr>')
+    # hero
     if C["hero_headline"]:
-        L.append(hero_block(C["hero_headline"], C["hero_sub"], C["hero_cta"],
-                            C["hero_url"], A, C["hero_bg"]))
-
+        L.append(f'<tr><td style="background:{C["hero_bg"]};padding:44px 28px 40px;" align="center">'
+                 f'<div style="font:800 30px/1.2 Arial,Helvetica,sans-serif;color:#ffffff;max-width:480px;">'
+                 f'{esc(C["hero_headline"])}</div>'
+                 f'<div style="font:400 15px/1.6 Arial,Helvetica,sans-serif;color:#ffffff;'
+                 f'opacity:.78;margin-top:14px;">{esc(C["hero_sub"])}</div></td></tr>')
+    # intro
     if C["intro"]:
-        L.append(f'<tr><td class="px" style="padding:26px 28px 4px;font:400 15px/1.7 '
-                 f'Arial,Helvetica,sans-serif;color:#3a3a3a;">{nl2br(C["intro"])}</td></tr>')
-
-    L.append(f'<!-- ===== {len(C["blocks"])} article block(s) ===== -->')
-    between_run = C.get("sp_between_run", "")
+        L.append(f'<tr><td style="padding:26px 28px 4px;font:400 15px/1.7 Arial,Helvetica,sans-serif;'
+                 f'color:#3a3a3a;">{nl2br(C["intro"])}</td></tr>')
+    # articles
     for i, b in enumerate(C["blocks"], start=1):
-        L.append(f'<!-- article {i} of {len(C["blocks"])} -->')
-        headline = b["headline"] or f"Update #{i}"
+        hl = b["headline"] or f"Update #{i}"
         if C["zalgo_on"]:
-            headline = zalgo(headline, C["zalgo_n"])
-        L.append(article_block(i, headline, b["body"], b["cta"] or C["default_cta"],
-                               b["url"] or C["default_url"], A))
-        if between_run and i < len(C["blocks"]):
-            L.append(f'<!-- content-push:between -->')
-            L.append(between_run)
-
-    if C["products"]:
-        L.append(grid_block(C["products"], A, cols=C["grid_cols"], title=C["grid_title"]))
-
+            hl = zalgo(hl, C["zalgo_n"])
+        L.append(f'<tr><td style="padding:24px 28px 6px;font:700 19px/1.35 Arial,Helvetica,sans-serif;'
+                 f'color:#111111;">{esc(hl)}</td></tr>')
+        if b["body"]:
+            L.append(f'<tr><td style="padding:0 28px 16px;font:400 15px/1.68 Arial,Helvetica,sans-serif;'
+                     f'color:#3a3a3a;">{nl2br(b["body"])}</td></tr>')
+        cta = b["cta"] or C["default_cta"]
+        url = b["url"] or C["default_url"]
+        if cta:
+            L.append(f'<tr><td style="padding:0 28px 24px;">'
+                     f'<a href="{url}" style="display:inline-block;background:{A};color:#fff;'
+                     f'text-decoration:none;font:700 13px Arial,Helvetica,sans-serif;'
+                     f'padding:11px 22px;border-radius:4px;">{esc(cta)}</a></td></tr>')
+    # banner
     if C["banner_headline"]:
-        L.append(banner_block(C["banner_headline"], C["banner_cta"],
-                              C["banner_url"], A))
-
-    L.append(footer_block(C["domain"], C["address"], C["socials"],
-                          C["unsub_text"], A))
-
-    L.append('</table>')
-    L.append('<!--[if mso]></td></tr></table><![endif]-->')
-    L.append('</td></tr>')
-    L.append('</table>')
-
-    if C["tracker"]:
-        L.append(f'<img src="{{{{iurl}}}}" width="1" height="1" alt="" '
-                 f'style="display:none;width:1px;height:1px;border:0;">')
-
-    L.append('</body>')
-    L.append('</html>')
-
+        L.append(f'<tr><td style="background:#f5f7fb;padding:34px 28px;" align="center">'
+                 f'<div style="font:800 21px/1.3 Arial,Helvetica,sans-serif;color:#111;">'
+                 f'{esc(C["banner_headline"])}</div></td></tr>')
+    # footer
+    L.append('<tr><td style="padding:30px 28px 8px;border-top:1px solid #ececec;" align="center">'
+             f'<div style="font:400 12px/1.7 Arial,Helvetica,sans-serif;color:#9a9a9a;">'
+             f'{esc(C["address"])}</div>'
+             f'<div style="margin-top:8px;font:400 12px Arial,Helvetica,sans-serif;">'
+             f'<a href="{{{{uurl}}}}" style="color:{A};">Unsubscribe</a></div></td></tr>')
+    L.append('</table></td></tr></table></body></html>')
     doc = "\n".join(L)
-
-    # --- injections into the body (order matters) ---
-    if C.get("rand_on"):
-        doc = inject_random_strings(
-            doc,
-            C["rand_count"],
-            C["rand_min"],
-            C["rand_max"],
-            C["rand_prefix"],
-        )
-
-    if C.get("ss_on"):
-        doc = inject_script_content(
-            doc,
-            C["ss_count"],
-            C["ss_script"],
-            C["ss_prefix"],
-        )
-
-    if C.get("rm_on"):
-        run = build_macro_run(
-            C["rm_macros"],
-            C["rm_reps"],
-            C["rm_sep"],
-            C["rm_wrap"],
-            interleave=C.get("rm_interleave", False),
-        )
-        doc = inject_macro_run(doc, run, C["rm_placement"], C["rm_every"])
-
-    # Content-push spacers at start/end of body.
-    # (Preheader tail and between-block positions were handled above.)
-    if C.get("sp_start_run"):
-        doc = inject_at_position(doc, C["sp_start_run"], "Start of body")
-    if C.get("sp_end_run"):
-        doc = inject_at_position(doc, C["sp_end_run"], "End of body")
 
     if C["pad_to"] and doc.count("\n") + 1 < C["pad_to"]:
         need = C["pad_to"] - (doc.count("\n") + 1)
-        pad_lines = [f'<!-- filler line {i + 1} -->' for i in range(need)]
-        doc = doc.replace('</body>', "\n".join(pad_lines) + "\n</body>")
-
+        doc = doc.replace('</body>',
+                          "\n".join(f'<!-- filler {i+1} -->' for i in range(need)) + "\n</body>")
     return doc
 
-# ----------------------------------------------------------------------------
-# EML assembly
-# ----------------------------------------------------------------------------
-def wrap_b64(data: bytes, width=76):
-    b = base64.b64encode(data).decode("ascii")
-    return "\n".join(b[i:i + width] for i in range(0, len(b), width))
-
-def build_eml(from_addr, to_addr, subject, html_body, encode_subject,
-              base64_body, extra_headers=""):
+def build_eml(from_addr, to_addr, subject, html_body, encode_subject, base64_body, extra_headers=""):
     boundary = "b" + uuid.uuid4().hex[:16]
     subj = rfc2047_encode(subject) if encode_subject else subject
-
     if base64_body:
         enc = "base64"
-        payload = wrap_b64(html_body.encode("utf-8"))
+        payload = "\n".join(base64.b64encode(html_body.encode("utf-8")).decode("ascii")[i:i+76]
+                            for i in range(0, len(base64.b64encode(html_body.encode("utf-8")).decode("ascii")), 76))
     else:
         enc = "quoted-printable"
         payload = quopri.encodestring(html_body.encode("utf-8")).decode("ascii")
-
     text_body = html_to_text(html_body)
     headers = [
-        f"From: {from_addr}",
-        f"To: {to_addr}",
-        f"Subject: {subj}",
-        f"Date: {formatdate(localtime=True)}",
-        "MIME-Version: 1.0",
+        f"From: {from_addr}", f"To: {to_addr}", f"Subject: {subj}",
+        f"Date: {formatdate(localtime=True)}", "MIME-Version: 1.0",
     ]
     if extra_headers.strip():
         headers.append(extra_headers.strip())
     headers.append(f'Content-Type: multipart/alternative; boundary="{boundary}"')
+    return "\n".join([
+        "\n".join(headers), "",
+        f"--{boundary}", "Content-Type: text/plain; charset=utf-8",
+        "Content-Transfer-Encoding: quoted-printable", "",
+        quopri.encodestring(text_body.encode("utf-8")).decode("ascii"), "",
+        f"--{boundary}", "Content-Type: text/html; charset=utf-8",
+        f"Content-Transfer-Encoding: {enc}", "", payload, "",
+        f"--{boundary}--", "",
+    ])
 
-    parts = [
-        "\n".join(headers),
-        "",
-        f"--{boundary}",
-        "Content-Type: text/plain; charset=utf-8",
-        "Content-Transfer-Encoding: quoted-printable",
-        "",
-        quopri.encodestring(text_body.encode("utf-8")).decode("ascii"),
-        "",
-        f"--{boundary}",
-        "Content-Type: text/html; charset=utf-8",
-        f"Content-Transfer-Encoding: {enc}",
-        "",
-        payload,
-        "",
-        f"--{boundary}--",
-        "",
-    ]
-    return "\n".join(parts)
+with tabs[9]:
+    st.header("Email Builder")
+    st.caption("Combines everything into a single .html / .eml. This is the only tab that mixes features.")
 
-# ----------------------------------------------------------------------------
-# UI
-# ----------------------------------------------------------------------------
-st.title("📧 Bulk Email Template Generator")
-st.caption("Generate long-form (1000+ line) HTML emails from a bulk content list.")
+    if "bulk" not in st.session_state:
+        st.session_state.bulk = demo_content(12)
 
-if "bulk" not in st.session_state:
-    st.session_state.bulk = demo_content(12)
-if "prods" not in st.session_state:
-    st.session_state.prods = demo_products(4)
+    with st.expander("📦 Bulk content", expanded=True):
+        cc1, cc2 = st.columns([1, 1])
+        with cc1:
+            if st.button("Fill demo", key="eb_demo"):
+                st.session_state.bulk = demo_content(200)
+                st.rerun()
+        with cc2:
+            if st.button("Clear", key="eb_clear"):
+                st.session_state.bulk = ""
+                st.rerun()
+        bulk_text = st.text_area(
+            "Article blocks (`# Headline` · body · `> CTA` · `@ link` · `---` between blocks)",
+            key="bulk", height=200,
+        )
+        intro = st.text_area("Intro paragraph", "Here's what's new this week from {domain}.",
+                             height=60, key="eb_intro")
 
-with st.sidebar:
-    st.subheader("Sender")
-    from_addr = st.text_input("From", "news@{domain}")
-    to_addr = st.text_input("To", "{name} <you@example.com>")
-    subject = st.text_input("Subject", "This week's update")
-    preheader = st.text_input("Preheader (hidden preview text)", "You don't want to miss this.")
+    with st.expander("🎨 Brand & hero"):
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            brand = st.text_input("Brand", "ACME Co.", key="eb_brand")
+            subject = st.text_input("Subject", "This week's update", key="eb_subj")
+        with b2:
+            tagline = st.text_input("Tagline", "Weekly digest", key="eb_tag")
+            accent_name = st.selectbox("Accent", list(ACCENTS.keys()), key="eb_acc")
+        with b3:
+            preheader = st.text_input("Preheader", "You don't want to miss this.", key="eb_pre")
+        hero_headline = st.text_input("Hero headline", "Everything new, in one place", key="eb_hh")
+        hero_sub = st.text_input("Hero subline", "Hand-picked stories from the team.", key="eb_hs")
 
-    st.subheader("Brand & theme")
-    brand = st.text_input("Brand name", "ACME Co.")
-    tagline = st.text_input("Tagline", "Weekly digest")
-    accent_name = st.selectbox("Accent", list(ACCENTS.keys()), index=0)
-    accent = ACCENTS[accent_name]
-    page_bg = st.color_picker("Page background", "#f2f2f2")
-    header_bg = st.color_picker("Header background", "#111111")
-    header_fg = st.color_picker("Header text", "#ffffff")
-    hero_bg = st.color_picker("Hero background", "#0f172a")
+    with st.expander("⚙️ Encoding / obfuscation"):
+        c1, c2 = st.columns(2)
+        with c1:
+            moji_on = st.checkbox("cp1252 mojibake", False, key="eb_moji")
+            ent_on = st.checkbox("Numeric entities", False, key="eb_ent")
+            ent_rate = st.slider("Entity rate", 0.1, 1.0, 0.5, 0.1, key="eb_entr")
+            zalgo_on = st.checkbox("Zalgo headlines", False, key="eb_zg")
+            zalgo_n = st.slider("Zalgo intensity", 1, 8, 3, key="eb_zgn", disabled=not zalgo_on)
+        with c2:
+            ue_on = st.checkbox("Unicode-escape", False, key="eb_ue")
+            ue_style = st.selectbox("Style", UNICODE_ESCAPE_STYLES, key="eb_uest", disabled=not ue_on)
+            sm_on = st.checkbox("Script mojibake", False, key="eb_sm")
+            sm_preset = st.selectbox("Preset", list(MOJIBAKE_PRESETS.keys()),
+                                     key="eb_smp", disabled=not sm_on)
+            base64_body = st.checkbox("Base64 HTML part", False, key="eb_b64")
 
-    st.subheader("Hero")
-    hero_headline = st.text_input("Hero headline", "Everything new, in one place")
-    hero_sub = st.text_input("Hero subline", "Hand-picked stories from the team.")
-    hero_cta = st.text_input("Hero button", "Open the digest")
-    hero_url = st.text_input("Hero link", "{rurl}")
+    with st.expander("📏 Length"):
+        pad_to = st.number_input("Pad to at least N lines", 0, 20000, 1000, step=100, key="eb_pad")
 
-    st.subheader("Bulk content")
-    st.caption(
-        "One block per story. Separate blocks with `---` (or a blank line).\n\n"
-        "`# Headline` · body lines · `> CTA text` · `@ link`\n\n"
-        "One-liner form: `Headline | Body | CTA | link`"
-    )
-    n_demo = st.number_input("Demo blocks to generate", 10, 500, 250, step=10)
-    c1, c2 = st.columns(2)
-    if c1.button("Fill demo", use_container_width=True):
-        st.session_state.bulk = demo_content(int(n_demo))
-        st.rerun()
-    if c2.button("Clear", use_container_width=True):
-        st.session_state.bulk = ""
-        st.rerun()
-
-    bulk_text = st.text_area("Article blocks", key="bulk", height=260)
-    intro = st.text_area("Intro paragraph", "Here's what's new this week from {domain}.", height=80)
-
-    st.subheader("Defaults for blocks")
-    default_cta = st.text_input("Default CTA", "Read more")
-    default_url = st.text_input("Default link", "{rurl}")
-
-    st.subheader("Product grid")
-    prods_text = st.text_area("Products (Title | Price | link, one per line)", key="prods", height=120)
-    grid_title = st.text_input("Grid title", "Popular this week")
-    grid_cols = st.select_slider("Columns", [1, 2, 3], value=2)
-
-    st.subheader("Banner")
-    banner_headline = st.text_input("Banner headline", "Ready to get started?")
-    banner_cta = st.text_input("Banner button", "Create an account")
-    banner_url = st.text_input("Banner link", "{rurl}")
-
-    st.subheader("Footer")
-    nav_raw = st.text_input("Header nav (Label|url, comma separated)",
-                            "Home|{domain}, Blog|{ourl}, Contact|{rurl}")
-    domain = st.text_input("Footer domain", "{domain}")
-    address = st.text_input("Address line", "ACME Co. · 1 Main St, Springfield · © 2025")
-    socials_raw = st.text_input("Socials (Label|url, comma separated)",
-                                "Twitter|{ourl}, LinkedIn|{ourl}, Web|{domain}")
-    unsub_text = st.text_input("Unsubscribe label", "Unsubscribe")
-    tracker = st.checkbox("Include 1x1 open-tracking pixel", True)
-
-    st.subheader("Obfuscation / encoding")
-    add_hidden = st.checkbox("Hidden preheader div", True)
-    zalgo_on = st.checkbox("Zalgo-mangle headlines", False)
-    zalgo_n = st.slider("Zalgo intensity", 1, 8, 3, disabled=not zalgo_on)
-    moji_on = st.checkbox("Mojibake-corrupt body (UTF-8 read as cp1252)", False)
-    ent_on = st.checkbox("Numeric-entity-encode body text", False)
-    ent_rate = st.slider("Entity rate", 0.1, 1.0, 0.5, disabled=not ent_on)
-    encode_subject = st.checkbox("RFC 2047 encode Subject header", False)
-    base64_body = st.checkbox("Base64-encode HTML MIME part", False)
-    extra_headers = st.text_area(
-        "Extra headers (one per line)",
-        "List-Unsubscribe: <mailto:unsub@{domain}?subject=unsubscribe>\n"
-        "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
-        height=80,
-    )
-
-    st.subheader("Unicode escape sequences")
-    ue_on = st.checkbox("Escape headlines & bodies to Unicode sequences", False)
-    ue_style = st.selectbox(
-        "Escape style", UNICODE_ESCAPE_STYLES, index=0, disabled=not ue_on,
-        help="HTML hex/decimal styles render as the original characters. "
-             "Backslash / U+ / Python / JSON styles are source-level noise only.",
-    )
-    ue_rate = st.slider("Escape rate", 0.1, 1.0, 1.0, step=0.1, disabled=not ue_on)
-    ue_skip_ascii = st.checkbox(
-        "Leave plain ASCII words untouched", True, disabled=not ue_on,
-    )
-
-    st.subheader("Script mojibake")
-    sm_on = st.checkbox("Apply script mojibake to headlines & bodies", False)
-    sm_preset = st.selectbox(
-        "Mojibake preset", list(MOJIBAKE_PRESETS.keys()), index=0, disabled=not sm_on,
-    )
-
-    st.subheader("Repeated macros")
-    rm_on = st.checkbox("Inject repeated merge-tag macros", False)
-    rm_sel = st.multiselect(
-        "Macros to repeat",
-        options=MERGE_TAGS + ["(custom)"],
-        default=["{name}"],
-        disabled=not rm_on,
-    )
-    rm_custom = st.text_input(
-        "Custom macro", "{name}",
-        disabled=not rm_on or "(custom)" not in rm_sel,
-    )
-    rm_reps = st.slider(
-        "Repetitions per macro", 1, 500, 20, step=1, disabled=not rm_on,
-    )
-    rm_sep_label = st.selectbox(
-        "Separator between macros", list(MACRO_SEPARATORS.keys()),
-        index=0, disabled=not rm_on,
-    )
-    rm_wrap = st.selectbox(
-        "Wrapper", MACRO_WRAPPERS, index=1, disabled=not rm_on,
-    )
-    rm_placement = st.selectbox(
-        "Placement", MACRO_PLACEMENTS, index=0, disabled=not rm_on,
-    )
-    rm_every = st.slider(
-        "N (for 'Every N lines')", 2, 200, 20, step=1,
-        disabled=not rm_on or rm_placement != "Every N lines",
-    )
-    rm_interleave = st.checkbox(
-        "Interleave (shuffle macros instead of grouping)", False, disabled=not rm_on,
-    )
-
-    st.subheader("Content push / spacer")
-    sp_on = st.checkbox("Inject spacer runs", True,
-                        help="Repeating spacer characters used to push content around "
-                             "(classic use: pad the preheader tail so inbox previews show "
-                             "your intended text).")
-    sp_char_label = st.selectbox(
-        "Spacer character", list(SPACER_CHARS.keys()), index=1, disabled=not sp_on,
-    )
-    sp_count = st.slider(
-        "Units per run", 1, 500, 60, step=1, disabled=not sp_on,
-        help="How many copies of the spacer character per insertion point.",
-    )
-    sp_wrap = st.selectbox(
-        "Wrapper", SPACER_WRAPPERS, index=0, disabled=not sp_on,
-        help="'Hidden span' keeps the spacer invisible but still in the DOM. "
-             "'Plain' outputs raw characters (visible if the character isn't "
-             "whitespace).",
-    )
-    sp_positions = st.multiselect(
-        "Insertion points",
-        options=SPACER_POSITIONS,
-        default=["Preheader tail"],
-        disabled=not sp_on,
-        help="Where to place the spacer runs. Multiple can be selected.",
-    )
-
-    st.subheader("Random alphanumeric strings")
-    rand_on = st.checkbox("Inject random strings into HTML body", True)
-    rand_count = st.slider("How many", 1, 300, 40, step=1, disabled=not rand_on)
-    rand_min, rand_max = st.slider(
-        "Length range", 4, 40, (8, 16), disabled=not rand_on
-    )
-    rand_prefix = st.text_input(
-        "Comment prefix", "rnd", disabled=not rand_on,
-    )
-
-    st.subheader("Hidden script content")
-    ss_on = st.checkbox("Inject real script text as HTML comments", False)
-    ss_script = st.selectbox(
-        "Script", list(SCRIPT_SAMPLES.keys()), index=0, disabled=not ss_on,
-    )
-    ss_count = st.slider("How many strings", 1, 200, 30, step=1, disabled=not ss_on)
-    ss_prefix = st.text_input("Script comment prefix", "txt", disabled=not ss_on)
-
-    st.subheader("Length & display")
-    pad_to = st.number_input("Pad output to at least N lines (0 = off)", 0, 20000, 1000, step=100)
-    preview_blocks = st.slider("Max blocks rendered in Preview tab", 5, 100, 15, step=5)
-    max_display_lines = st.slider("Max lines shown in source tabs", 200, 5000, 1000, step=100)
-
-# ----------------------------------------------------------------------------
-# Build the data
-# ----------------------------------------------------------------------------
-with st.spinner("Parsing blocks…"):
     blocks = parse_blocks(bulk_text)
 
-if moji_on:
-    blocks = [{**b, "body": to_mojibake(b["body"]), "headline": to_mojibake(b["headline"])}
-              for b in blocks]
-    intro = to_mojibake(intro)
-    hero_headline = to_mojibake(hero_headline)
+    if moji_on:
+        blocks = [{**b, "body": to_mojibake(b["body"]), "headline": to_mojibake(b["headline"])}
+                  for b in blocks]
+        intro = to_mojibake(intro)
+    if ent_on:
+        blocks = [{**b, "body": to_numeric_entities(b["body"], ent_rate)} for b in blocks]
+        intro = to_numeric_entities(intro, ent_rate)
+    if sm_on:
+        blocks = [{**b,
+                   "headline": to_script_mojibake(b["headline"], sm_preset),
+                   "body": to_script_mojibake(b["body"], sm_preset)}
+                  for b in blocks]
+        intro = to_script_mojibake(intro, sm_preset)
+    if ue_on:
+        blocks = [{**b,
+                   "headline": to_unicode_escape(b["headline"], ue_style),
+                   "body": to_unicode_escape(b["body"], ue_style)} for b in blocks]
+        intro = to_unicode_escape(intro, ue_style)
 
-if ent_on:
-    blocks = [{**b, "body": to_numeric_entities(b["body"], ent_rate)} for b in blocks]
-    intro = to_numeric_entities(intro, ent_rate)
+    C = dict(
+        subject=subject, accent=ACCENTS[accent_name], page_bg="#f2f2f2",
+        brand=brand, tagline=tagline,
+        header_bg="#111111", header_fg="#ffffff",
+        hero_headline=hero_headline, hero_sub=hero_sub,
+        hero_bg="#0f172a",
+        preheader=preheader, intro=intro, blocks=blocks,
+        default_cta="Read more", default_url="{rurl}",
+        banner_headline="Ready to get started?",
+        domain="{domain}", address="ACME Co. · 1 Main St, Springfield · © 2025",
+        zalgo_on=zalgo_on, zalgo_n=zalgo_n, pad_to=int(pad_to),
+    )
 
-if sm_on:
-    blocks = [{**b,
-               "headline": to_script_mojibake(b["headline"], sm_preset),
-               "body": to_script_mojibake(b["body"], sm_preset)}
-              for b in blocks]
-    intro = to_script_mojibake(intro, sm_preset)
-    hero_headline = to_script_mojibake(hero_headline, sm_preset)
-
-if ue_on:
-    blocks = [{**b,
-               "headline": to_unicode_escape(b["headline"], ue_style, ue_rate, ue_skip_ascii),
-               "body": to_unicode_escape(b["body"], ue_style, ue_rate, ue_skip_ascii)}
-              for b in blocks]
-    intro = to_unicode_escape(intro, ue_style, ue_rate, ue_skip_ascii)
-    hero_headline = to_unicode_escape(hero_headline, ue_style, ue_rate, ue_skip_ascii)
-
-def parse_pairs(raw, default=None):
-    out = []
-    for chunk in raw.split(","):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        if "|" in chunk:
-            l, u = chunk.split("|", 1)
-            out.append((l.strip(), u.strip()))
-        elif default:
-            out.append((chunk, default))
-    return out
-
-nav = parse_pairs(nav_raw)
-socials = parse_pairs(socials_raw, default="{domain}")
-
-products = []
-for line in prods_text.splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    parts = [p.strip() for p in line.split("|")]
-    if len(parts) >= 3:
-        products.append((parts[0], parts[1], parts[2]))
-    elif len(parts) == 2:
-        products.append((parts[0], parts[1], "{ourl}"))
-
-# Resolve repeated-macro selection
-rm_macros_final = [m for m in rm_sel if m != "(custom)"]
-if "(custom)" in rm_sel and rm_custom.strip():
-    rm_macros_final.append(rm_custom.strip())
-
-# Resolve spacer runs per position
-sp_unit = SPACER_CHARS[sp_char_label] if sp_on else ""
-def _mk_spacer():
-    return build_spacer_run(sp_unit, int(sp_count), sp_wrap) if sp_on else ""
-
-preheader_spacer  = _mk_spacer() if "Preheader tail" in sp_positions else ""
-sp_start_run      = _mk_spacer() if "Start of body" in sp_positions else ""
-sp_end_run        = _mk_spacer() if "End of body" in sp_positions else ""
-sp_between_run    = _mk_spacer() if "Between each article block" in sp_positions else ""
-
-C = dict(
-    subject=subject, accent=accent, page_bg=page_bg,
-    brand=brand, tagline=tagline, nav=nav,
-    header_bg=header_bg, header_fg=header_fg,
-    hero_headline=hero_headline, hero_sub=hero_sub, hero_cta=hero_cta,
-    hero_url=hero_url, hero_bg=hero_bg,
-    preheader=preheader if add_hidden else "",
-    preheader_spacer=preheader_spacer if add_hidden else "",
-    intro=intro, blocks=blocks,
-    default_cta=default_cta, default_url=default_url,
-    products=products, grid_title=grid_title, grid_cols=int(grid_cols),
-    banner_headline=banner_headline, banner_cta=banner_cta, banner_url=banner_url,
-    domain=domain, address=address, socials=socials, unsub_text=unsub_text,
-    tracker=tracker, zalgo_on=zalgo_on, zalgo_n=zalgo_n, pad_to=int(pad_to),
-    rand_on=rand_on, rand_count=int(rand_count),
-    rand_min=int(rand_min), rand_max=int(rand_max),
-    rand_prefix=rand_prefix,
-    ss_on=ss_on, ss_script=ss_script, ss_count=int(ss_count), ss_prefix=ss_prefix,
-    rm_on=rm_on, rm_macros=rm_macros_final, rm_reps=int(rm_reps),
-    rm_sep=MACRO_SEPARATORS[rm_sep_label], rm_wrap=rm_wrap,
-    rm_placement=rm_placement, rm_every=int(rm_every),
-    rm_interleave=rm_interleave,
-    sp_start_run=sp_start_run,
-    sp_end_run=sp_end_run,
-    sp_between_run=sp_between_run,
-)
-
-with st.spinner("Building HTML & EML…"):
     html_out = build_html(C)
-    eml_out = build_eml(from_addr, to_addr, subject, html_out,
-                        encode_subject, base64_body, extra_headers)
+    eml_out = build_eml("news@{domain}", "{name} <you@example.com>", subject, html_out,
+                        False, base64_body)
 
-# ----------------------------------------------------------------------------
-# Metrics + downloads
-# ----------------------------------------------------------------------------
-lines = html_out.count("\n") + 1
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("HTML lines", f"{lines:,}")
-m2.metric("HTML size", f"{len(html_out.encode('utf-8')) / 1024:.1f} KB")
-m3.metric("Article blocks", f"{len(blocks):,}")
-m4.metric("EML size", f"{len(eml_out.encode('utf-8')) / 1024:.1f} KB")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("HTML lines", f"{html_out.count(chr(10))+1:,}")
+    m2.metric("HTML size", f"{len(html_out.encode('utf-8'))/1024:.1f} KB")
+    m3.metric("Blocks", f"{len(blocks):,}")
 
-if lines < 1000:
-    st.info(f"Output is {lines:,} lines. Add more blocks (or set 'Pad to at least N lines' to 1000) "
-            f"to reach the 1000+ line target.")
+    d1, d2 = st.columns(2)
+    d1.download_button("⬇ .html", html_out, file_name="template.html",
+                       mime="text/html", use_container_width=True)
+    d2.download_button("⬇ .eml", eml_out, file_name="template.eml",
+                       mime="message/rfc822", use_container_width=True)
 
-d1, d2, _ = st.columns([1, 1, 2])
-d1.download_button("⬇ Download .html", html_out,
-                   file_name="template.html", mime="text/html",
-                   use_container_width=True)
-d2.download_button("⬇ Download .eml", eml_out,
-                   file_name="template.eml", mime="message/rfc822",
-                   use_container_width=True)
+    with st.expander("👁 Preview"):
+        preview = (html_out.replace("{name}", "Alex").replace("{domain}", "example.com")
+                   .replace("{ourl}", "#").replace("{rurl}", "#")
+                   .replace("{uurl}", "#").replace("{iurl}", ""))
+        st.components.v1.html(preview, height=600, scrolling=True)
 
-# ----------------------------------------------------------------------------
-# Tabs
-# ----------------------------------------------------------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["Preview", "HTML source", "Raw .eml", "Merge tags"])
-
-with tab1:
-    if len(blocks) > preview_blocks:
-        st.warning(
-            f"Preview shows only the first **{preview_blocks}** of **{len(blocks)}** blocks "
-            f"to keep your browser responsive. The downloaded .html contains all blocks."
-        )
-        small_C = dict(C)
-        small_C["blocks"] = blocks[:preview_blocks]
-        preview_html = build_html(small_C)
-    else:
-        preview_html = html_out
-
-    preview = (preview_html
-               .replace("{name}", "Alex")
-               .replace("{domain}", "example.com")
-               .replace("{ourl}", "#")
-               .replace("{rurl}", "#")
-               .replace("{uurl}", "#")
-               .replace("{iurl}", ""))
-    st.components.v1.html(preview, height=760, scrolling=True)
-
-with tab2:
-    html_lines = html_out.splitlines()
-    if len(html_lines) > max_display_lines:
-        st.info(
-            f"Showing first **{max_display_lines:,}** of **{len(html_lines):,}** lines. "
-            f"Use the ⬇ Download .html button above for the full file."
-        )
-        st.code("\n".join(html_lines[:max_display_lines]), language="html")
-    else:
-        st.code(html_out, language="html")
-
-with tab3:
-    eml_lines = eml_out.splitlines()
-    if len(eml_lines) > max_display_lines:
-        st.info(
-            f"Showing first **{max_display_lines:,}** of **{len(eml_lines):,}** lines. "
-            f"Use the ⬇ Download .eml button above for the full file."
-        )
-        st.code("\n".join(eml_lines[:max_display_lines]), language="text")
-    else:
-        st.code(eml_out, language="text")
-
-with tab4:
-    st.write("Paste these into any field. They survive into the final HTML/EML.")
-    for tag in MERGE_TAGS:
-        st.code(tag, language="text")
+    with st.expander("📄 HTML source"):
+        st.code(html_out[:50000], language="html")
