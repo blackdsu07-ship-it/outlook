@@ -102,6 +102,31 @@ SCRIPT_SAMPLES = {
     "Kurdish":              "سڵاو جیهان ئەمە دەقێکی تاقیکارییە بەخێربێن",
 }
 
+MACRO_SEPARATORS = {
+    "(none)":      "",
+    "space":       " ",
+    "&nbsp;":      "&nbsp;",
+    "<wbr>":       "<wbr>",
+    "&#8203;":     "&#8203;",
+    "newline":     "\n",
+    "<!-- -->":    "<!-- -->",
+    "comma":       ",",
+}
+
+MACRO_WRAPPERS = [
+    "Hidden span",
+    "Visible inline",
+    "HTML comment",
+    "Plain (no wrap)",
+]
+
+MACRO_PLACEMENTS = [
+    "Start of body",
+    "End of body",
+    "Both ends",
+    "Every N lines",
+]
+
 # ----------------------------------------------------------------------------
 # Text transforms
 # ----------------------------------------------------------------------------
@@ -261,6 +286,83 @@ def inject_script_content(doc, count, script, prefix="txt"):
         lines.insert(idx, f"<!-- {prefix}:{strings[i]} -->")
 
     return head + "\n".join(lines) + tail
+
+# ---------------------------------------------------------------------------
+# Repeated macros
+# ---------------------------------------------------------------------------
+def build_macro_run(macros, reps_per, separator, wrapper, interleave=False):
+    """Build a run of repeated macros.
+       - macros: list of macro strings
+       - reps_per: how many times each macro appears
+       - separator: string inserted between every macro occurrence
+       - wrapper: Hidden span / Visible inline / HTML comment / Plain
+       - interleave: shuffle macros instead of grouping by type
+    """
+    if not macros or reps_per <= 0:
+        return ""
+
+    if interleave:
+        pool = macros * int(reps_per)
+        random.shuffle(pool)
+        parts = pool
+    else:
+        parts = []
+        for m in macros:
+            parts.extend([m] * int(reps_per))
+
+    body = separator.join(parts)
+
+    if wrapper == "Hidden span":
+        return (
+            '<span style="display:none;font-size:0;line-height:0;'
+            'max-height:0;max-width:0;opacity:0;overflow:hidden;'
+            'mso-hide:all;">' + body + '</span>'
+        )
+    if wrapper == "HTML comment":
+        return f'<!-- {body} -->'
+    if wrapper == "Plain (no wrap)":
+        return body
+    return body  # Visible inline
+
+def inject_macro_run(doc, run, placement, every_n=20):
+    """Insert a macro run into the document at the chosen placement."""
+    if not run:
+        return doc
+
+    if placement == "Start of body":
+        i = doc.find("<body")
+        if i < 0:
+            return doc
+        i = doc.find(">", i) + 1
+        return doc[:i] + "\n" + run + "\n" + doc[i:]
+
+    if placement == "End of body":
+        i = doc.rfind("</body>")
+        if i < 0:
+            return doc
+        return doc[:i] + run + "\n" + doc[i:]
+
+    if placement == "Both ends":
+        i = doc.find("<body")
+        if i >= 0:
+            i = doc.find(">", i) + 1
+            doc = doc[:i] + "\n" + run + "\n" + doc[i:]
+        j = doc.rfind("</body>")
+        if j >= 0:
+            doc = doc[:j] + run + "\n" + doc[j:]
+        return doc
+
+    if placement == "Every N lines":
+        n = max(2, int(every_n))
+        lines = doc.split("\n")
+        out = []
+        for idx, line in enumerate(lines):
+            out.append(line)
+            if idx > 0 and idx % n == 0:
+                out.append(run)
+        return "\n".join(out)
+
+    return doc
 
 def html_to_text(h):
     t = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', h, flags=re.S | re.I)
@@ -580,6 +682,16 @@ def build_html(C):
             C["ss_prefix"],
         )
 
+    if C.get("rm_on"):
+        run = build_macro_run(
+            C["rm_macros"],
+            C["rm_reps"],
+            C["rm_sep"],
+            C["rm_wrap"],
+            interleave=C.get("rm_interleave", False),
+        )
+        doc = inject_macro_run(doc, run, C["rm_placement"], C["rm_every"])
+
     if C["pad_to"] and doc.count("\n") + 1 < C["pad_to"]:
         need = C["pad_to"] - (doc.count("\n") + 1)
         pad_lines = [f'<!-- filler line {i + 1} -->' for i in range(need)]
@@ -751,6 +863,43 @@ with st.sidebar:
              "(e.g. Arabic UTF-8 bytes read as Latin-1).",
     )
 
+    st.subheader("Repeated macros")
+    rm_on = st.checkbox("Inject repeated merge-tag macros", False)
+    rm_sel = st.multiselect(
+        "Macros to repeat",
+        options=MERGE_TAGS + ["(custom)"],
+        default=["{name}"],
+        disabled=not rm_on,
+        help="Pick one or more built-in tags; add '(custom)' to enter your own below.",
+    )
+    rm_custom = st.text_input(
+        "Custom macro", "{name}",
+        disabled=not rm_on or "(custom)" not in rm_sel,
+        help="Used when '(custom)' is selected above.",
+    )
+    rm_reps = st.slider(
+        "Repetitions per macro", 1, 500, 20, step=1, disabled=not rm_on,
+        help="Total macros = number of selected macros × this value.",
+    )
+    rm_sep_label = st.selectbox(
+        "Separator between macros", list(MACRO_SEPARATORS.keys()),
+        index=0, disabled=not rm_on,
+    )
+    rm_wrap = st.selectbox(
+        "Wrapper", MACRO_WRAPPERS, index=0, disabled=not rm_on,
+        help="Hidden span keeps them invisible; Visible inline will render the tag literally.",
+    )
+    rm_placement = st.selectbox(
+        "Placement", MACRO_PLACEMENTS, index=0, disabled=not rm_on,
+    )
+    rm_every = st.slider(
+        "N (for 'Every N lines')", 2, 200, 20, step=1,
+        disabled=not rm_on or rm_placement != "Every N lines",
+    )
+    rm_interleave = st.checkbox(
+        "Interleave (shuffle macros instead of grouping)", False, disabled=not rm_on,
+    )
+
     st.subheader("Random alphanumeric strings")
     rand_on = st.checkbox("Inject random strings into HTML body", True)
     rand_count = st.slider("How many", 1, 300, 40, step=1, disabled=not rand_on)
@@ -838,6 +987,11 @@ for line in prods_text.splitlines():
     elif len(parts) == 2:
         products.append((parts[0], parts[1], "{ourl}"))
 
+# Resolve repeated-macro selection into an actual list
+rm_macros_final = [m for m in rm_sel if m != "(custom)"]
+if "(custom)" in rm_sel and rm_custom.strip():
+    rm_macros_final.append(rm_custom.strip())
+
 C = dict(
     subject=subject, accent=accent, page_bg=page_bg,
     brand=brand, tagline=tagline, nav=nav,
@@ -855,6 +1009,10 @@ C = dict(
     rand_min=int(rand_min), rand_max=int(rand_max),
     rand_prefix=rand_prefix,
     ss_on=ss_on, ss_script=ss_script, ss_count=int(ss_count), ss_prefix=ss_prefix,
+    rm_on=rm_on, rm_macros=rm_macros_final, rm_reps=int(rm_reps),
+    rm_sep=MACRO_SEPARATORS[rm_sep_label], rm_wrap=rm_wrap,
+    rm_placement=rm_placement, rm_every=int(rm_every),
+    rm_interleave=rm_interleave,
 )
 
 with st.spinner("Building HTML & EML…"):
