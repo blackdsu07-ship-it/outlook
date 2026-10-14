@@ -51,7 +51,6 @@ def nl2br(s):
     return esc(s).replace("\n", "<br>")
 
 def to_mojibake(text):
-    """Encode UTF-8 then misread the bytes as cp1252 (classic mojibake bug)."""
     out = []
     for b in text.encode("utf-8"):
         if b < 0x80:
@@ -209,6 +208,7 @@ def footer_block(domain, address, socials, unsub, accent):
 # ----------------------------------------------------------------------------
 # Bulk content parser
 # ----------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
 def parse_blocks(text):
     blocks, cur, started = [], {"headline": "", "body": [], "cta": "", "url": ""}, False
 
@@ -254,6 +254,7 @@ def parse_blocks(text):
     flush()
     return blocks
 
+@st.cache_data(show_spinner=False)
 def demo_content(n):
     out = []
     for i in range(1, n + 1):
@@ -265,6 +266,7 @@ def demo_content(n):
         out.append("---")
     return "\n".join(out)
 
+@st.cache_data(show_spinner=False)
 def demo_products(n):
     out = []
     for i in range(1, n + 1):
@@ -522,24 +524,26 @@ with st.sidebar:
         height=80,
     )
 
-    st.subheader("Length")
+    st.subheader("Length & display")
     pad_to = st.number_input("Pad output to at least N lines (0 = off)", 0, 20000, 1000, step=100)
+    preview_blocks = st.slider("Max blocks rendered in Preview tab", 5, 100, 15, step=5)
+    max_display_lines = st.slider("Max lines shown in source tabs", 200, 5000, 1000, step=100)
 
 # ----------------------------------------------------------------------------
 # Build the data
 # ----------------------------------------------------------------------------
-blocks = parse_blocks(bulk_text)
+with st.spinner("Parsing blocks…"):
+    blocks = parse_blocks(bulk_text)
 
+# Apply encoding transforms (only on the first run / when inputs change)
 if moji_on:
-    for b in blocks:
-        b["body"] = to_mojibake(b["body"])
-        b["headline"] = to_mojibake(b["headline"])
+    blocks = [{**b, "body": to_mojibake(b["body"]), "headline": to_mojibake(b["headline"])}
+              for b in blocks]
     intro = to_mojibake(intro)
     hero_headline = to_mojibake(hero_headline)
 
 if ent_on:
-    for b in blocks:
-        b["body"] = to_numeric_entities(b["body"], ent_rate)
+    blocks = [{**b, "body": to_numeric_entities(b["body"], ent_rate)} for b in blocks]
     intro = to_numeric_entities(intro, ent_rate)
 
 def parse_pairs(raw, default=None):
@@ -584,12 +588,13 @@ C = dict(
     tracker=tracker, zalgo_on=zalgo_on, zalgo_n=zalgo_n, pad_to=int(pad_to),
 )
 
-html_out = build_html(C)
-eml_out = build_eml(from_addr, to_addr, subject, html_out,
-                    encode_subject, base64_body, extra_headers)
+with st.spinner("Building HTML & EML…"):
+    html_out = build_html(C)
+    eml_out = build_eml(from_addr, to_addr, subject, html_out,
+                        encode_subject, base64_body, extra_headers)
 
 # ----------------------------------------------------------------------------
-# Metrics + tabs
+# Metrics + downloads (always visible, above tabs)
 # ----------------------------------------------------------------------------
 lines = html_out.count("\n") + 1
 m1, m2, m3, m4 = st.columns(4)
@@ -602,10 +607,32 @@ if lines < 1000:
     st.info(f"Output is {lines:,} lines. Add more blocks (or set 'Pad to at least N lines' to 1000) "
             f"to reach the 1000+ line target.")
 
+d1, d2, _ = st.columns([1, 1, 2])
+d1.download_button("⬇ Download .html", html_out,
+                   file_name="template.html", mime="text/html",
+                   use_container_width=True)
+d2.download_button("⬇ Download .eml", eml_out,
+                   file_name="template.eml", mime="message/rfc822",
+                   use_container_width=True)
+
+# ----------------------------------------------------------------------------
+# Tabs
+# ----------------------------------------------------------------------------
 tab1, tab2, tab3, tab4 = st.tabs(["Preview", "HTML source", "Raw .eml", "Merge tags"])
 
 with tab1:
-    preview = (html_out
+    if len(blocks) > preview_blocks:
+        st.warning(
+            f"Preview shows only the first **{preview_blocks}** of **{len(blocks)}** blocks "
+            f"to keep your browser responsive. The downloaded .html contains all blocks."
+        )
+        small_C = dict(C)
+        small_C["blocks"] = blocks[:preview_blocks]
+        preview_html = build_html(small_C)
+    else:
+        preview_html = html_out
+
+    preview = (preview_html
                .replace("{name}", "Alex")
                .replace("{domain}", "example.com")
                .replace("{ourl}", "#")
@@ -615,14 +642,26 @@ with tab1:
     st.components.v1.html(preview, height=760, scrolling=True)
 
 with tab2:
-    st.code(html_out, language="html")
-    st.download_button("⬇ Download .html", html_out,
-                       file_name="template.html", mime="text/html")
+    html_lines = html_out.splitlines()
+    if len(html_lines) > max_display_lines:
+        st.info(
+            f"Showing first **{max_display_lines:,}** of **{len(html_lines):,}** lines. "
+            f"Use the ⬇ Download .html button above for the full file."
+        )
+        st.code("\n".join(html_lines[:max_display_lines]), language="html")
+    else:
+        st.code(html_out, language="html")
 
 with tab3:
-    st.code(eml_out, language="text")
-    st.download_button("⬇ Download .eml", eml_out,
-                       file_name="template.eml", mime="message/rfc822")
+    eml_lines = eml_out.splitlines()
+    if len(eml_lines) > max_display_lines:
+        st.info(
+            f"Showing first **{max_display_lines:,}** of **{len(eml_lines):,}** lines. "
+            f"Use the ⬇ Download .eml button above for the full file."
+        )
+        st.code("\n".join(eml_lines[:max_display_lines]), language="text")
+    else:
+        st.code(eml_out, language="text")
 
 with tab4:
     st.write("Paste these into any field. They survive into the final HTML/EML.")
