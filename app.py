@@ -232,7 +232,7 @@ def build_macro_run(macros, reps_per, separator, interleave=False):
     return separator.join(parts)
 
 # ============================================================================
-# UI — one tab per generator
+# UI
 # ============================================================================
 st.title("🧰 Email Utility Toolkit")
 st.caption("Each tab is a standalone generator. Pick a tool, put input in, take output out.")
@@ -252,6 +252,7 @@ tabs = st.tabs([
 
 # ---------------------------------------------------------------------------
 # TAB 1 — Mojibake
+# NOTE: output text_area has NO key -> it re-renders from `value` on every run.
 # ---------------------------------------------------------------------------
 with tabs[0]:
     st.header("Mojibake Generator")
@@ -264,9 +265,9 @@ with tabs[0]:
         key="mj_in",
     )
     out = to_mojibake(src)
-    st.text_area("Mojibake output", value=out, height=140, key="mj_out")
+    st.text_area("Mojibake output", value=out, height=140)
     st.download_button("⬇ Download .txt", out, file_name="mojibake.txt",
-                       mime="text/plain", use_container_width=False)
+                       mime="text/plain")
 
 # ---------------------------------------------------------------------------
 # TAB 2 — Script Mojibake
@@ -285,7 +286,7 @@ with tabs[1]:
                            height=140, key="sm_in")
 
     out = to_script_mojibake(src, preset)
-    st.text_area("Output", value=out, height=180, key="sm_out")
+    st.text_area("Output", value=out, height=180)
     st.download_button("⬇ Download .txt", out, file_name="script_mojibake.txt",
                        mime="text/plain")
 
@@ -308,7 +309,7 @@ with tabs[2]:
                        value="Hello 世界 — Café — مرحبا — Γειά",
                        height=140, key="ue_in")
     out = to_unicode_escape(src, style, rate, skip_ascii)
-    st.text_area("Output", value=out, height=180, key="ue_out")
+    st.text_area("Output", value=out, height=180)
     st.download_button("⬇ Download .txt", out, file_name="unicode_escaped.txt",
                        mime="text/plain")
 
@@ -326,7 +327,7 @@ with tabs[3]:
         intensity = st.slider("Intensity", 1, 20, 5, key="zg_int")
 
     out = zalgo(src, intensity)
-    st.text_area("Output", value=out, height=180, key="zg_out")
+    st.text_area("Output", value=out, height=180)
     st.download_button("⬇ Download .txt", out, file_name="zalgo.txt", mime="text/plain")
 
 # ---------------------------------------------------------------------------
@@ -343,11 +344,11 @@ with tabs[4]:
         rate = st.slider("Encode rate", 0.1, 1.0, 1.0, step=0.1, key="ne_rate")
 
     out = to_numeric_entities(src, rate)
-    st.text_area("Output", value=out, height=180, key="ne_out")
+    st.text_area("Output", value=out, height=180)
     st.download_button("⬇ Download .txt", out, file_name="entities.txt", mime="text/plain")
 
 # ---------------------------------------------------------------------------
-# TAB 6 — Random Strings
+# TAB 6 — Random Strings (button-driven; session_state is intentional)
 # ---------------------------------------------------------------------------
 with tabs[5]:
     st.header("Random Alphanumeric String Generator")
@@ -376,13 +377,14 @@ with tabs[5]:
     }
 
     if st.button("🎲 Generate", key="rs_go"):
-        strings = [rand_alpha(random.randint(min_len, max_len), pools[pool_label])
-                   for _ in range(int(count))]
-        st.session_state["rs_output"] = strings
+        st.session_state["rs_output"] = [
+            rand_alpha(random.randint(min_len, max_len), pools[pool_label])
+            for _ in range(int(count))
+        ]
 
     strings = st.session_state.get("rs_output", [])
     as_lines = "\n".join(strings)
-    st.text_area("Output (one per line)", value=as_lines, height=220, key="rs_out")
+    st.text_area("Output (one per line)", value=as_lines, height=220)
     if strings:
         st.download_button("⬇ Download .txt", as_lines, file_name="random_strings.txt",
                            mime="text/plain")
@@ -406,7 +408,7 @@ with tabs[6]:
 
     strings = st.session_state.get("sc_output", [])
     as_lines = "\n".join(strings)
-    st.text_area("Output (one per line)", value=as_lines, height=220, key="sc_out")
+    st.text_area("Output (one per line)", value=as_lines, height=220)
     if strings:
         st.download_button("⬇ Download .txt", as_lines, file_name="script_content.txt",
                            mime="text/plain")
@@ -448,7 +450,7 @@ with tabs[7]:
             macros, int(reps), MACRO_SEPARATORS[sep_label], interleave)
 
     out = st.session_state.get("rm_output", "")
-    st.text_area("Output", value=out, height=200, key="rm_out")
+    st.text_area("Output", value=out, height=200)
     if out:
         st.download_button("⬇ Download .txt", out, file_name="macros.txt", mime="text/plain")
         st.caption(f"{len(out):,} chars · {out.count(chr(10))+1:,} lines")
@@ -468,16 +470,13 @@ with tabs[8]:
         n = st.number_input("How many", 1, 10000, 60, step=1, key="sp_count")
 
     out = build_spacer_run(SPACER_CHARS[char_label], int(n))
-    st.text_area("Output", value=out, height=200, key="sp_out")
+    st.text_area("Output", value=out, height=200)
     st.download_button("⬇ Download .txt", out, file_name="spacers.txt", mime="text/plain")
     st.caption(f"{len(out):,} chars")
 
 # ---------------------------------------------------------------------------
-# TAB 10 — Email Builder (the combined one, on demand)
+# TAB 10 — Email Builder
 # ---------------------------------------------------------------------------
-# (compact re-implementation of the earlier combined tool — same features,
-#  but now opt-in rather than the default output)
-
 def esc(s):
     return htmlmod.escape(str(s))
 
@@ -568,24 +567,20 @@ def build_html(C):
              '<td align="center" style="padding:24px 12px;">')
     L.append('<table role="presentation" width="600" style="width:600px;max-width:600px;'
              'background:#ffffff;border-radius:8px;overflow:hidden;">')
-    # header
     L.append(f'<tr><td style="background:{C["header_bg"]};padding:22px 28px 18px;">'
              f'<div style="font:800 22px/1.2 Arial,Helvetica,sans-serif;color:{C["header_fg"]};">'
              f'{esc(C["brand"])}</div>'
              f'<div style="font:400 12px/1.5 Arial,Helvetica,sans-serif;color:{C["header_fg"]};'
              f'opacity:.65;margin-top:5px;">{esc(C["tagline"])}</div></td></tr>')
-    # hero
     if C["hero_headline"]:
         L.append(f'<tr><td style="background:{C["hero_bg"]};padding:44px 28px 40px;" align="center">'
                  f'<div style="font:800 30px/1.2 Arial,Helvetica,sans-serif;color:#ffffff;max-width:480px;">'
                  f'{esc(C["hero_headline"])}</div>'
                  f'<div style="font:400 15px/1.6 Arial,Helvetica,sans-serif;color:#ffffff;'
                  f'opacity:.78;margin-top:14px;">{esc(C["hero_sub"])}</div></td></tr>')
-    # intro
     if C["intro"]:
         L.append(f'<tr><td style="padding:26px 28px 4px;font:400 15px/1.7 Arial,Helvetica,sans-serif;'
                  f'color:#3a3a3a;">{nl2br(C["intro"])}</td></tr>')
-    # articles
     for i, b in enumerate(C["blocks"], start=1):
         hl = b["headline"] or f"Update #{i}"
         if C["zalgo_on"]:
@@ -602,12 +597,10 @@ def build_html(C):
                      f'<a href="{url}" style="display:inline-block;background:{A};color:#fff;'
                      f'text-decoration:none;font:700 13px Arial,Helvetica,sans-serif;'
                      f'padding:11px 22px;border-radius:4px;">{esc(cta)}</a></td></tr>')
-    # banner
     if C["banner_headline"]:
         L.append(f'<tr><td style="background:#f5f7fb;padding:34px 28px;" align="center">'
                  f'<div style="font:800 21px/1.3 Arial,Helvetica,sans-serif;color:#111;">'
                  f'{esc(C["banner_headline"])}</div></td></tr>')
-    # footer
     L.append('<tr><td style="padding:30px 28px 8px;border-top:1px solid #ececec;" align="center">'
              f'<div style="font:400 12px/1.7 Arial,Helvetica,sans-serif;color:#9a9a9a;">'
              f'{esc(C["address"])}</div>'
@@ -627,8 +620,8 @@ def build_eml(from_addr, to_addr, subject, html_body, encode_subject, base64_bod
     subj = rfc2047_encode(subject) if encode_subject else subject
     if base64_body:
         enc = "base64"
-        payload = "\n".join(base64.b64encode(html_body.encode("utf-8")).decode("ascii")[i:i+76]
-                            for i in range(0, len(base64.b64encode(html_body.encode("utf-8")).decode("ascii")), 76))
+        encoded = base64.b64encode(html_body.encode("utf-8")).decode("ascii")
+        payload = "\n".join(encoded[i:i+76] for i in range(0, len(encoded), 76))
     else:
         enc = "quoted-printable"
         payload = quopri.encodestring(html_body.encode("utf-8")).decode("ascii")
